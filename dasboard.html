@@ -84,6 +84,20 @@ section{ margin-top:40px; }
 .pb-row{ display:grid; grid-template-columns:96px 1fr 48px; gap:10px; align-items:center; margin:4px 0; font-size:12px; color:var(--ink-soft); }
 .pb-row b{ text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
 .pb-row .track{ height:12px; }
+/* performance table (SD Index tab), styled after the CLF tracker's District Performance table */
+.perf-top{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.perf-search{ font-family:inherit; font-size:13.5px; padding:9px 14px; border-radius:10px; border:1px solid var(--line-strong); background:#fff; min-width:240px; }
+.perf th{ cursor:pointer; user-select:none; }
+.perf th:hover{ color:var(--ink); }
+.perf th.num, .perf td.num{ text-align:right; }
+.perf td{ padding:12px 10px; }
+.perf td.nm a{ color:var(--primary); font-weight:700; text-decoration:none; cursor:pointer; }
+.perf td.nm a:hover{ text-decoration:underline; }
+.perf td.rk{ font-family:"Iowan Old Style",Georgia,serif; font-size:16px; font-weight:700; color:var(--ink-soft); }
+.perf td.idx{ font-weight:700; font-size:14.5px; }
+.perf tr.me td{ background:var(--primary-soft); }
+.perf .g{ color:#1f7a59; } .perf .y{ color:#9a6f1f; } .perf .r{ color:#a54632; }
+.perf tbody tr:hover td{ background:var(--panel-alt); }
 /* export menu */
 .export-wrap{ position:relative; }
 .export-menu{ position:absolute; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--line-strong); border-radius:10px; box-shadow:0 8px 24px rgba(30,35,32,.12); padding:6px; z-index:50; min-width:220px; }
@@ -699,6 +713,11 @@ function scorecardHtml(u){
     <div class="overall-wrap"><div class="overall-big"><div class="ov" style="color:${COLORS[bucket(ov)]}">${fmtScore(ov)}</div><div class="ovl">SD Index / 100${SCOPE==='state'?' (median block)':''}</div>${standing}</div>
       <div>${compRowsExpandable(u)}</div></div>
     ${!u.dak.has_dak ? note('This block has no DAK, so Gender is left out and the other weights are rescaled.') : ''}`);
+  // full scores table: districts (state view) or the district's blocks
+  if(SCOPE==='state') h += section('District Performance', 'all 38 districts in Bihar &middot; click a column to sort &middot; click a district to open it',
+      perfTable(STATE_DATA.districts, true));
+  else h += section('Block Performance', `all ${DISTRICT_DATA.blocks.length} blocks in ${esc(DISTRICT_DATA.name)} &middot; click a column to sort &middot; click a block to open it`,
+      perfTable(DISTRICT_DATA.blocks, false, SCOPE==='block' ? u.block_id : null));
   const tot = COMPS.reduce((a,c)=>a+W[c.key],0)||1;
   h += section('How the Index Is Built', isDefaultW() ? 'agreed weights' : 'custom weights',
     `<div class="grid2" style="align-items:center;"><div>${stack(COMPS.map(c=>({label:c.label, pct:W[c.key]/tot*100})), ['#2F9C74','#5B8DB8','#CE9C3C','#7FB8A4','#B38B59','#8E7CC3','#C9CEC9'], {height:260, legendRight:true})}</div>
@@ -712,6 +731,52 @@ function scorecardHtml(u){
     AFTER.push(()=>{ blockBars('top10', STATE_DATA.top_blocks); blockBars('bot10', STATE_DATA.bottom_blocks); });
   }
   return h + footer();
+}
+// Rank, name, the 7 component scores and the SD Index. Rank always follows the
+// SD Index (current weights; ties share a rank); columns sort independently.
+function perfTable(rows, isDistrict, meId){
+  const id = 'perf'+(++RL_ID);
+  const ov = r=> rowOverall(r);
+  const sorted = [...rows].filter(r=>ov(r)!=null).map(ov).sort((a,b)=>b-a);
+  const rankOf = r=>{ const v=ov(r); return v==null ? null : sorted.findIndex(s=>s===v)+1; };
+  const cols = [{key:'rank', label:'Rank', val:rankOf, asc:true},
+                {key:'name', label:isDistrict?'District':'Block', val:r=>r.name, text:true},
+                ...COMPS.map(c=>({key:c.key, label:c.label, val:r=>r['comp_'+c.key], num:true, comp:true})),
+                {key:'overall', label:'SD Index', val:ov, num:true, idx:true}];
+  window.__perf = window.__perf || {};
+  window.__perf[id] = {rows, cols, sort:'rank', dir:'asc', q:'', meId, isDistrict};
+  AFTER.push(()=> drawPerf(id));
+  return `<div class="perf-top"><span class="hint">Scores out of 100 &middot; colour: green 66+, amber 33–66, red below 33</span>
+    <input class="perf-search" id="${id}-q" type="search" placeholder="Search this table…" aria-label="Search this table"></div>
+    <div class="table-wrap"><table class="perf" id="${id}"></table></div>`;
+}
+function drawPerf(id){
+  const st = window.__perf[id]; const t = document.getElementById(id); if(!t) return;
+  const col = st.cols.find(c=>c.key===st.sort);
+  const rows = st.rows.filter(r=> !st.q || r.name.toLowerCase().includes(st.q)).sort((a,b)=>{
+    const av=col.val(a), bv=col.val(b);
+    if(av==null) return 1; if(bv==null) return -1;
+    const d = col.text ? String(av).localeCompare(String(bv)) : av-bv;
+    return st.dir==='asc' ? d : -d;
+  });
+  const cls = v=> v==null ? '' : v>=66 ? 'g' : v>=33 ? 'y' : 'r';
+  t.innerHTML = `<thead><tr>${st.cols.map(c=>`<th data-k="${c.key}" class="${c.num?'num':''}">${c.label}<span class="arrow">${st.sort===c.key?(st.dir==='asc'?' ▲':' ▼'):' ⇅'}</span></th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r=>`<tr class="${st.meId!=null && r.block_id===st.meId?'me':''}">${st.cols.map(c=>{
+      const v = c.val(r);
+      if(c.key==='rank') return `<td class="rk">${v==null?'–':v}</td>`;
+      if(c.key==='name') return `<td class="nm"><a data-slug="${r.slug}">${esc(r.name)}</a></td>`;
+      if(c.key==='secondchance') return `<td class="num"><span class="hint">awaited</span></td>`;
+      return `<td class="num${c.idx?' idx':''} ${cls(v)}">${v==null?'—':Math.round(v)}</td>`;
+    }).join('')}</tr>`).join('')}</tbody>`;
+  t.querySelectorAll('th').forEach(th=> th.addEventListener('click', ()=>{
+    const k = th.dataset.k, c = st.cols.find(x=>x.key===k);
+    if(st.sort===k) st.dir = st.dir==='asc' ? 'desc' : 'asc';
+    else { st.sort = k; st.dir = (c.asc || c.text) ? 'asc' : 'desc'; }
+    drawPerf(id);
+  }));
+  t.querySelectorAll('td.nm a').forEach(a=> a.addEventListener('click', ()=> st.isDistrict ? navToDistrict(a.dataset.slug) : navToBlock(a.dataset.slug)));
+  const q = document.getElementById(id+'-q');
+  if(q && !q.dataset.wired){ q.dataset.wired = '1'; q.addEventListener('input', e=>{ st.q = e.target.value.trim().toLowerCase(); drawPerf(id); }); }
 }
 function blockBars(id, rows){
   const r = [...rows].reverse();
