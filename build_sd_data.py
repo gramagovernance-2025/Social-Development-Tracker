@@ -617,11 +617,21 @@ def score_units(units):
     comp_scores = pd.DataFrame(index=ids)
     for comp in COMPONENTS:
         ks = [k for k, c, *_ in KPIS if c == comp["key"]]
-        comp_scores[comp["key"]] = sc[ks].mean(axis=1, skipna=True).round(1) if ks else np.nan
+        comp_scores[comp["key"]] = sc[ks].mean(axis=1, skipna=True) if ks else np.nan
     w = pd.Series({c["key"]: c["weight"] for c in COMPONENTS})
     present = comp_scores.notna()
-    overall = ((comp_scores.fillna(0) * w).sum(axis=1) / present.mul(w).sum(axis=1).replace(0, np.nan)).round(1)
-    rank = overall.rank(ascending=False, method="min")
+    overall_raw = (comp_scores.fillna(0) * w).sum(axis=1) / present.mul(w).sum(axis=1).replace(0, np.nan)
+    # No shared ranks: rank on the UNROUNDED score; exact ties go to the higher
+    # Gender (DAK) score (largest weight), then alphabetical order.
+    names = pd.Series({i: str(units[i].get("name", i)) for i in ids})
+    order = pd.DataFrame({"o": overall_raw, "d": comp_scores["dak"].fillna(-1), "n": names})         .sort_values(["o", "d", "n"], ascending=[False, False, True], na_position="last")
+    rank = pd.Series(np.nan, index=ids)
+    scored_ids = [i for i in order.index if pd.notna(order.at[i, "o"])]
+    rank[scored_ids] = np.arange(1, len(scored_ids) + 1)
+    # sort key used by the page (keeps the same order as these ranks)
+    sort_key = pd.Series({i: (len(scored_ids) - (scored_ids.index(i))) for i in scored_ids})
+    overall = overall_raw.round(1)
+    comp_scores = comp_scores.round(1)
     for i in ids:
         u = units[i]
         u["kpi"] = {k: {"value": nz(vals.at[i, k]) if k in vals else None, "score": nz(sc.at[i, k])} for k, *_ in KPIS}
@@ -633,10 +643,11 @@ def score_units(units):
         u["comp_scores"] = {c["key"]: nz(float(comp_scores.at[i, c["key"]])) for c in COMPONENTS}
         u["overall_score"] = nz(float(overall.at[i]))
         u["overall_state_rank"] = None if math.isnan(rank.at[i]) else int(rank.at[i])
+        u["overall_sort"] = int(sort_key[i]) if i in sort_key.index else None
         u["overall_state_n"] = int(overall.notna().sum())
 
 def rank_row(u, extra):
-    row = {**extra, "overall_score": u["overall_score"], "overall_state_rank": u["overall_state_rank"]}
+    row = {**extra, "overall_score": u["overall_score"], "overall_state_rank": u["overall_state_rank"], "overall_sort": u.get("overall_sort")}
     for c in COMPONENTS:
         row["comp_" + c["key"]] = u["comp_scores"][c["key"]]
     for k, *_ in KPIS:
@@ -668,7 +679,8 @@ def main():
     for d in DISTRICTS:
         ids = UNIV[UNIV.district_norm == d].block_id.tolist()
         ov = pd.Series({i: blocks[i]["overall_score"] for i in ids}, dtype=float)
-        rk = ov.rank(ascending=False, method="min")
+        srt = pd.Series({i: blocks[i]["overall_sort"] for i in ids}, dtype=float)
+        rk = srt.rank(ascending=False, method="first")
         for i in ids:
             blocks[i]["overall_district_rank"] = None if math.isnan(rk[i]) else int(rk[i])
             blocks[i]["overall_district_n"] = int(ov.notna().sum())

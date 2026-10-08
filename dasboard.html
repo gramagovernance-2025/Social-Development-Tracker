@@ -91,7 +91,8 @@ section{ margin-top:40px; }
 .perf th:hover{ color:var(--ink); }
 .perf th.num, .perf td.num{ text-align:right; }
 .perf td{ padding:12px 10px; }
-.perf td.nm a{ color:var(--primary); font-weight:700; text-decoration:none; cursor:pointer; }
+.perf td.nm a{ font-weight:700; text-decoration:none; cursor:pointer; }
+.perf td.nm a.g{ color:#1f7a59; } .perf td.nm a.y{ color:#9a6f1f; } .perf td.nm a.r{ color:#a54632; }
 .perf td.nm a:hover{ text-decoration:underline; }
 .perf td.rk{ font-family:"Iowan Old Style",Georgia,serif; font-size:16px; font-weight:700; color:var(--ink-soft); }
 .perf td.idx{ font-weight:700; font-size:14.5px; }
@@ -505,6 +506,14 @@ function wOverall(comp){
 function isDefaultW(){ return COMPS.every(c=> W[c.key]===DEFAULT_W[c.key]); }
 function rowComp(r){ const o={}; SCORED_COMPS.forEach(c=> o[c.key]=r['comp_'+c.key]); return o; }
 function rowOverall(r){ return isDefaultW() ? r.overall_score : wOverall(rowComp(r)); }
+// SD Index order with no shared places: the build's tie-free order for the
+// agreed weights; otherwise exact ties go to the higher DAK score, then A-Z.
+function byIndex(a, b){
+  if(isDefaultW() && a.overall_sort!=null && b.overall_sort!=null) return b.overall_sort - a.overall_sort;
+  const d = (rowOverall(b)??-1) - (rowOverall(a)??-1); if(Math.abs(d) > 1e-9) return d;
+  const k = (b.comp_dak??-1) - (a.comp_dak??-1); if(k) return k;
+  return String(a.name).localeCompare(String(b.name));
+}
 function unitOverall(u){ return isDefaultW() ? u.overall_score : wOverall(u.comp_scores); }
 async function ensureScoringSummary(){ if(!SCORING_SUMMARY) SCORING_SUMMARY = await fetchJson('data/scoring_summary.json'); return SCORING_SUMMARY; }
 function weightLine(){
@@ -559,15 +568,18 @@ function rankList(rows, opts){
 function drawRankList(id){
   const st = window.__lists[id]; const root = document.getElementById(id); if(!root) return;
   const s = st.opts.sorts.find(x=>x.key===st.sort) || st.opts.sorts[0];
-  const rows = [...st.rows].sort((a,b)=>{ const av=s.val(a), bv=s.val(b); if(av==null) return 1; if(bv==null) return -1; return bv-av; });
+  const rows = [...st.rows].sort((a,b)=>{ const av=s.val(a), bv=s.val(b); if(av==null) return 1; if(bv==null) return -1;
+    if(s.key==='overall') return byIndex(a,b);
+    return (bv-av) || String(a.name).localeCompare(String(b.name)); });
   const sel = (!st.opts.linked && st.opts.sorts.length>1) ? `<label class="hint">Sort by <select data-sort>${st.opts.sorts.map(x=>`<option value="${x.key}"${x.key===st.sort?' selected':''}>${x.label}</option>`).join('')}</select></label>` : '';
-  root.innerHTML = `<div class="rl-head"><span class="hint">${rows.length} ${st.opts.noun||''} by ${esc(s.label)} &middot; click a row for details</span>${sel}</div><div class="${rows.length>12?'rl-scroll':''}">` +
+  const nNull = rows.filter(r=>s.val(r)==null).length;
+  root.innerHTML = `<div class="rl-head"><span class="hint">${rows.length} ${st.opts.noun||''} by ${esc(s.label)}${nNull?` &middot; ${nNull} with no data, listed last`:''} &middot; click a row for details</span>${sel}</div><div class="${rows.length>12?'rl-scroll':''}">` +
     rows.map((r,i)=>{
       const v = s.val(r); const me = st.opts.meId!=null && r[st.opts.idKey]===st.opts.meId;
       return `<div class="rl-row${me?' me':''}" data-i="${st.rows.indexOf(r)}" role="button" tabindex="0" aria-expanded="false">
-        <span class="rk">${v==null?'–':i+1}</span><span class="nm">${esc(r.name)}${st.opts.sub?` <small>${esc(st.opts.sub(r))}</small>`:''}</span>
+        <span class="rk">${v==null?'–':i+1}</span><span class="nm" style="color:${v==null?'var(--ink-soft)':COLORS[bucket(v)]}">${esc(r.name)}${st.opts.sub?` <small>${esc(st.opts.sub(r))}</small>`:''}</span>
         <div class="track"><div class="fill ${bucket(v)}" style="width:${v==null?0:Math.max(2,Math.min(100,v))}%"></div></div>
-        <span class="vl">${fmtScore(v)}</span><span class="chev">&#9654;</span></div>
+        <span class="vl">${v==null?'<span class="hint" style="font-weight:400;">no data</span>':fmtScore(v)}</span><span class="chev">&#9654;</span></div>
         <div class="rl-detail" data-d="${st.rows.indexOf(r)}"></div>`;
     }).join('') + '</div>';
   const selEl = root.querySelector('[data-sort]');
@@ -713,11 +725,6 @@ function scorecardHtml(u){
     <div class="overall-wrap"><div class="overall-big"><div class="ov" style="color:${COLORS[bucket(ov)]}">${fmtScore(ov)}</div><div class="ovl">SD Index / 100${SCOPE==='state'?' (median block)':''}</div>${standing}</div>
       <div>${compRowsExpandable(u)}</div></div>
     ${!u.dak.has_dak ? note('This block has no DAK, so Gender is left out and the other weights are rescaled.') : ''}`);
-  // full scores table: districts (state view) or the district's blocks
-  if(SCOPE==='state') h += section('District Performance', 'all 38 districts in Bihar &middot; click a column to sort &middot; click a district to open it',
-      perfTable(STATE_DATA.districts, true));
-  else h += section('Block Performance', `all ${DISTRICT_DATA.blocks.length} blocks in ${esc(DISTRICT_DATA.name)} &middot; click a column to sort &middot; click a block to open it`,
-      perfTable(DISTRICT_DATA.blocks, false, SCOPE==='block' ? u.block_id : null));
   const tot = COMPS.reduce((a,c)=>a+W[c.key],0)||1;
   h += section('How the Index Is Built', isDefaultW() ? 'agreed weights' : 'custom weights',
     `<div class="grid2" style="align-items:center;"><div>${stack(COMPS.map(c=>({label:c.label, pct:W[c.key]/tot*100})), ['#2F9C74','#5B8DB8','#CE9C3C','#7FB8A4','#B38B59','#8E7CC3','#C9CEC9'], {height:260, legendRight:true})}</div>
@@ -730,6 +737,11 @@ function scorecardHtml(u){
       `<div class="grid2">${card('<div id="top10"></div>','Top 10')}${card('<div id="bot10"></div>','Bottom 10')}</div>`, true);
     AFTER.push(()=>{ blockBars('top10', STATE_DATA.top_blocks); blockBars('bot10', STATE_DATA.bottom_blocks); });
   }
+  // full scores table: districts (state view) or the district's blocks
+  if(SCOPE==='state') h += section('District Performance', 'all 38 districts in Bihar &middot; click a column to sort &middot; click a district to open it',
+      perfTable(STATE_DATA.districts, true));
+  else h += section('Block Performance', `all ${DISTRICT_DATA.blocks.length} blocks in ${esc(DISTRICT_DATA.name)} &middot; click a column to sort &middot; click a block to open it`,
+      perfTable(DISTRICT_DATA.blocks, false, SCOPE==='block' ? u.block_id : null));
   return h + footer();
 }
 // Rank, name, the 7 component scores and the SD Index. Rank always follows the
@@ -737,8 +749,8 @@ function scorecardHtml(u){
 function perfTable(rows, isDistrict, meId){
   const id = 'perf'+(++RL_ID);
   const ov = r=> rowOverall(r);
-  const sorted = [...rows].filter(r=>ov(r)!=null).map(ov).sort((a,b)=>b-a);
-  const rankOf = r=>{ const v=ov(r); return v==null ? null : sorted.findIndex(s=>s===v)+1; };
+  const ranked = [...rows].filter(r=>ov(r)!=null).sort(byIndex);
+  const rankOf = r=>{ const i = ranked.indexOf(r); return i<0 ? null : i+1; };
   const cols = [{key:'rank', label:'Rank', val:rankOf, asc:true},
                 {key:'name', label:isDistrict?'District':'Block', val:r=>r.name, text:true},
                 ...COMPS.map(c=>({key:c.key, label:c.label, val:r=>r['comp_'+c.key], num:true, comp:true})),
@@ -760,13 +772,14 @@ function drawPerf(id){
     return st.dir==='asc' ? d : -d;
   });
   const cls = v=> v==null ? '' : v>=66 ? 'g' : v>=33 ? 'y' : 'r';
+  const ov = r=> rowOverall(r);
   t.innerHTML = `<thead><tr>${st.cols.map(c=>`<th data-k="${c.key}" class="${c.num?'num':''}">${c.label}<span class="arrow">${st.sort===c.key?(st.dir==='asc'?' ▲':' ▼'):' ⇅'}</span></th>`).join('')}</tr></thead>
     <tbody>${rows.map(r=>`<tr class="${st.meId!=null && r.block_id===st.meId?'me':''}">${st.cols.map(c=>{
       const v = c.val(r);
       if(c.key==='rank') return `<td class="rk">${v==null?'–':v}</td>`;
-      if(c.key==='name') return `<td class="nm"><a data-slug="${r.slug}">${esc(r.name)}</a></td>`;
+      if(c.key==='name') return `<td class="nm"><a class="${cls(ov(r))}" data-slug="${r.slug}" title="SD Index ${fmtScore(ov(r))}">${esc(r.name)}</a></td>`;
       if(c.key==='secondchance') return `<td class="num"><span class="hint">awaited</span></td>`;
-      return `<td class="num${c.idx?' idx':''} ${cls(v)}">${v==null?'—':Math.round(v)}</td>`;
+      return `<td class="num${c.idx?' idx':''} ${cls(v)}">${v==null?'<span class="hint">no data</span>':Math.round(v)}</td>`;
     }).join('')}</tr>`).join('')}</tbody>`;
   t.querySelectorAll('th').forEach(th=> th.addEventListener('click', ()=>{
     const k = th.dataset.k, c = st.cols.find(x=>x.key===k);
