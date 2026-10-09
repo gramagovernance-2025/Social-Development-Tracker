@@ -380,7 +380,7 @@ async function init(){
   const years = (META.period_keys||[]).filter(k=>k!=='cumulative');
   const latestY = Math.max(...years.map(Number));
   ps.innerHTML = `<option value="cumulative">Cumulative</option><optgroup label="Year">${years.map(y=>`<option value="${y}">${y}${Number(y)===latestY?' (so far)':''}</option>`).join('')}</optgroup>`
-    + `<optgroup label="Month (DAK and Nursery figures)">${[...(META.months||[])].reverse().map(m=>`<option value="${m}">${monthLabel(m).replace(" '", ' 20')}</option>`).join('')}</optgroup>`;
+;
   try{ const sp = localStorage.getItem('sd-period'); if(sp && [...ps.options].some(o=>o.value===sp)) PERIOD = sp; }catch(e){}
   ps.value = PERIOD;
   ps.addEventListener('change', e=>{ PERIOD = e.target.value; try{ localStorage.setItem('sd-period', PERIOD); }catch(_){} SCORING_SUMMARY_P=null; applyPeriod(); refreshView(); });
@@ -753,31 +753,41 @@ function glanceCards(u){
       <div class="gh"><span class="gname">${o.lab}</span>${o.none||o.idx?'':`<span class="pill ${bucket(o.s)}" title="${isState?'component score of the median block':'component score out of 100'}">score ${o.s==null?'—':fmtScore(o.s)}</span>`}</div>
       <div class="gv">${o.v}</div><div class="gc">${o.c}</div></button>`).join('')}</div>`;
 }
-// When a month is chosen: DAK and nursery show that month's own figures;
-// everything else (and all scores) uses the calendar year the month is in.
-function monthBanner(comp){
-  const raw = rawUnit(), m = raw && raw.monthly ? raw.monthly[PERIOD] : null;
-  const yr = yearKey()==='cumulative' ? 'cumulative figures' : yearKey();
-  const intro = `<p class="disclaimer" style="margin:0 0 12px;">Monthly figures exist only for DAK and Nursery. Scores and every other figure on this page are for <b>${esc(yr)}</b>.</p>`;
-  if(!m) return section(`${esc(periodText())}`, '', intro, false);
-  let t = '';
-  if(comp==='dak' || comp==='overview'){
-    const rr = (a)=> a[0] ? fmtPct(a[1]/a[0]*100,0)+' resolved so far' : '';
-    t += `<div class="subhead">Gender (DAK) in ${esc(periodText())}</div>` + tiles([
-      tile('Entitlement cases', fmtNum(m.ent[0]), rr(m.ent)), tile('Gender-violence cases', fmtNum(m.gbv[0]), rr(m.gbv)),
+// Month view, only on the DAK and Nursery tabs (the only sources that report
+// monthly). Months follow the period chosen at the top: a year shows its own
+// months, Cumulative shows all. Scores always stay at the year/cumulative level.
+let MONTH_SEL = {};
+function monthContent(comp, ym){
+  const raw = rawUnit(), m = raw && raw.monthly ? raw.monthly[ym] : null;
+  const lab = monthLabel(ym).replace(" '", ' 20');
+  if(!m) return `<p class="disclaimer">No data for ${esc(lab)}.</p>`;
+  if(comp==='dak'){
+    const rr = a=> a[0] ? fmtPct(a[1]/a[0]*100,0)+' resolved so far' : '';
+    return tiles([tile('Entitlement cases', fmtNum(m.ent[0]), rr(m.ent)), tile('Gender-violence cases', fmtNum(m.gbv[0]), rr(m.gbv)),
       tile('Alternate-service transactions', m.alt?fmtNum(m.alt[0]):'—', m.alt?`${fmtRs(m.alt[1])} &middot; ${m.alt[2]} service${m.alt[2]===1?'':'s'}`:'month not scraped')]);
   }
-  if(comp==='nursery' || comp==='overview'){
-    t += `<div class="subhead" style="margin-top:${comp==='overview'?18:0}px;">Nursery in ${esc(periodText())}</div>` + (m.nur ? tiles([
-      tile('Plants sold', fmtNum(m.nur[0])), tile('Value sold', fmtRs(m.nur[1])),
-      tile('Paid', fmtRs(m.nur[2]), m.nur[1]?`${fmtPct(m.nur[2]/m.nur[1]*100,0)} of value sold`:''), tile('Plants in stock', fmtNum(m.nur[4]), 'end of month')]) : '<p class="disclaimer">No nursery report for this month.</p>');
-  }
-  if(!t) return section(`${esc(periodText())}`, '', intro, false);
-  return `<section><div class="month-panel">${intro}${t}</div></section>`;
+  return m.nur ? tiles([tile('Plants sold', fmtNum(m.nur[0])), tile('Value sold', fmtRs(m.nur[1])),
+      tile('Paid', fmtRs(m.nur[2]), m.nur[1]?`${fmtPct(m.nur[2]/m.nur[1]*100,0)} of value sold`:''), tile('Plants in stock', fmtNum(m.nur[4]), 'end of month')])
+    : '<p class="disclaimer">No nursery report for this month.</p>';
+}
+function monthPicker(comp){
+  const months = [...(META.months||[])].filter(m=> PERIOD==='cumulative' || m.startsWith(PERIOD)).reverse();
+  if(!months.length) return '';
+  const cur = months.includes(MONTH_SEL[comp]) ? MONTH_SEL[comp] : months[0];
+  MONTH_SEL[comp] = cur;
+  AFTER.push(()=>{
+    const sel = document.getElementById('mp-'+comp); if(!sel) return;
+    sel.addEventListener('change', ()=>{ MONTH_SEL[comp] = sel.value; document.getElementById('mp-body-'+comp).innerHTML = monthContent(comp, sel.value); });
+  });
+  return `<section><div class="month-panel">
+    <div class="explore-bar" style="margin-bottom:12px;"><label class="subhead" for="mp-${comp}" style="margin:0;">Month</label>
+      <select class="chart-select" id="mp-${comp}">${months.map(m=>`<option value="${m}"${m===cur?' selected':''}>${monthLabel(m).replace(" '", ' 20')}</option>`).join('')}</select>
+      <span class="hint">figures for one month &middot; the scores below stay at ${esc(periodText())}</span></div>
+    <div id="mp-body-${comp}">${monthContent(comp, cur)}</div></div></section>`;
 }
 function overviewHtml(u){
   let h = `<div class="page-title"><h2 class="serif">${esc(scopeName())}</h2><span class="hint">${esc(periodText())} &middot; ${SCOPE==='state'?'All 38 districts and 534 blocks':'Social development at a glance'} &middot; click a card to open it</span></div>`;
-  if(isMonth()) h += monthBanner('overview');
+
   h += section('At a Glance', 'card colour = how the figure shown scores &middot; pill = the component score' + (SCOPE==='state'?' (median block)':''), glanceCards(u), true);
   AFTER.push(()=> document.querySelectorAll('[data-go]').forEach(b=> b.addEventListener('click', ()=> setTab(b.dataset.go))));
   if(SCOPE==='state') h += explore(STATE_DATA.districts, overallOptions(), true, r=>navToDistrict(r.slug), {detail:compDetail});
@@ -930,7 +940,7 @@ function componentHtml(comp, u){
   const c = COMPS.find(x=>x.key===comp);
   const pn = ((META.period_notes||{})[yearKey()]||{})[comp] || META.periods[comp] || '';
   let h = `<div class="page-title"><h2 class="serif">${c.label} &mdash; ${esc(scopeName())}</h2><span class="hint">${esc(periodText())} &middot; ${esc(pn)}</span></div>`;
-  if(isMonth()) h += monthBanner(comp);
+  if(comp==='dak' || comp==='nursery') h += monthPicker(comp);
   if(comp==='secondchance' || comp==='budget') return h + RENDER[comp](u) + footer();
   h += scorePanel(comp, u);
   h += RENDER[comp](u);

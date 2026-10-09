@@ -34,12 +34,12 @@ Tabs: Overview, one tab per component (Gender (DAK), VRF, VPRP, Nursery, Plantat
 
 ## Period selector
 
-There are three choices: **Cumulative**, calendar years (**2026 so far**, **2025**), and months. These are calendar years, like the DAK tracker. The build computes every metric, score and rank for each of the three periods (`periods` in each JSON file; cumulative is the top level).
+The selector at the top offers **Cumulative**, **2026 (so far)** and **2025**. These apply to every tab. Months are picked separately, inside the DAK and Nursery tabs only. These are calendar years, like the DAK tracker. The build computes every metric, score and rank for each of the three periods (`periods` in each JSON file; cumulative is the top level).
 - **DAK cases and alternate services** are counted by month. **Nursery** sales, payments and stock come from the monthly reports.
 - **VPRP** is yearly: each calendar year shows that year's plan, and 2026 shows the 2025 plan until 2026 plans exist.
 - **Plantation** is by season: 2025 shows the 2025-26 season, and 2026 shows 2025-26 until 2026-27 data exists.
 - **VRF, disability and Second Chance** have no history, so they are the same in every period.
-- **Months:** DAK and Nursery show that month's own figures in a panel at the top of the tab (`monthly`). Scores and everything else use the calendar year the month falls in.
+- **Months:** the DAK and Nursery tabs have a Month dropdown, listing that year's months, or all months under Cumulative. It shows that month's own figures (`monthly`). Scores stay at the year or cumulative level.
 
 ## Discrepancy Report tab and "last updated"
 
