@@ -835,11 +835,26 @@ def block_rule_flags(blocks):
     for _, r in NUR_OVERSOLD.iterrows():
         add(r.block_id, "nursery", "Sold more plants than were in stock", "check", f"{r.period}: {int(r.sold_m):,} plants sold, but only {int(r.prev_stock):,} in stock the month before", int(r.sold_m))
     # Plantation: more alive than given; species not adding up to the total
-    for y in PLY:
+    # More alive than given: can happen if surviving plants from an earlier
+    # season are counted in. A "check" when last season's survivors could
+    # explain the excess (or there is no earlier season to compare with);
+    # an "error" only when they cannot.
+    seasons = list(PLY)
+    for j, y in enumerate(seasons):
         lv = PL_LIVE[y].groupby("block_id").live.sum(); dt = PL_DIST[y].groupby("block_id").Total.sum()
+        prev = PL_LIVE[seasons[j - 1]].groupby("block_id").live.sum() if j > 0 else pd.Series(dtype=float)
         both = pd.concat([lv, dt], axis=1).dropna()
         for bid, r in both[both.live > both.Total].iterrows():
-            add(bid, "plantation", "More plants alive than were given", "error", f"{y}: {int(r.live):,} alive but {int(r.Total):,} given", int(r.live))
+            excess = r.live - r.Total
+            pv = prev.get(bid) if j > 0 else None
+            if j == 0 or pv is None or pd.isna(pv):
+                sev, why = "check", "may include plants from earlier planting drives (no earlier season to compare)"
+            elif excess <= pv:
+                sev, why = "check", f"may include surviving plants from {seasons[j - 1]} ({int(pv):,} were alive then)"
+            else:
+                sev, why = "error", f"more than last season's {int(pv):,} surviving plants can explain"
+            add(bid, "plantation", "More plants alive than were given", sev,
+                f"{y}: {int(r.live):,} alive but {int(r.Total):,} given (+{int(excess):,}); {why}", int(r.live))
         sp = PL_DIST[y].groupby("block_id")[SPECIES].sum().sum(axis=1)
         diff = pd.concat([sp.rename("sp"), dt.rename("tot")], axis=1).dropna()
         for bid, r in diff[(diff.sp - diff.tot).abs() > 0.01 * diff.tot.clip(lower=1)].iterrows():
