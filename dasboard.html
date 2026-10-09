@@ -67,7 +67,7 @@ section{ margin-top:40px; }
 .awaited{ color:var(--ink-soft) !important; font-size:20px !important; font-weight:600 !important; }
 
 /* At a glance cards: 8 cards (SD Index + 7 components) in a 4 x 2 grid */
-.glance{ display:grid !important; grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:14px; }
+.glance{ display:grid !important; grid-template-columns:repeat(3,minmax(0,1fr)) !important; gap:14px; }
 @media (max-width:980px){ .glance{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; } }
 @media (max-width:520px){ .glance{ grid-template-columns:1fr !important; } }
 .gcard.green{ background:var(--primary-soft); border-color:#9fd3bd; } .gcard.green .gv{ color:#1f7a59; }
@@ -119,6 +119,11 @@ section{ margin-top:40px; }
 .issue{ display:grid; grid-template-columns:auto 1fr; gap:4px 12px; padding:10px 0; border-top:1px solid var(--line); }
 .issue:first-child{ border-top:none; padding-top:0; }
 .issue .it{ font-weight:600; font-size:13.5px; } .issue .id{ grid-column:2; font-size:12.5px; color:var(--ink-soft); }
+/* period selector + month banner */
+.navfield.periodfield{ min-width:190px; flex:0 0 auto; }
+.navfield select#sel-period{ font-weight:700; color:var(--primary); border-color:var(--primary); }
+.month-panel{ background:var(--primary-soft); border:1px solid #9fd3bd; border-radius:14px; padding:18px 20px; }
+.month-panel .tile{ background:#fff; }
 /* export menu */
 .export-wrap{ position:relative; }
 .export-menu{ position:absolute; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--line-strong); border-radius:10px; box-shadow:0 8px 24px rgba(30,35,32,.12); padding:6px; z-index:50; min-width:220px; }
@@ -274,6 +279,7 @@ tbody tr:last-child td{ border-bottom:none; }
     <div class="navbar">
       <div class="navfield"><label for="sel-district">District</label><select id="sel-district"><option value="">— All Bihar (State view) —</option></select></div>
       <div class="navfield"><label for="sel-block">Block</label><select id="sel-block" disabled><option value="">— Whole district —</option></select></div>
+      <div class="navfield periodfield"><label for="sel-period">Period</label><select id="sel-period"></select></div>
     </div>
     <div class="crumbs" id="crumbs"></div>
     <nav class="tabbar" id="tabbar" aria-label="Components"></nav>
@@ -344,20 +350,47 @@ async function fetchJson(path){
 // State + navigation
 // ============================================================================
 let MANIFEST=null, STATE_DATA=null, DISTRICT_DATA=null, BLOCK_DATA=null, SCORING_SUMMARY=null;
+// Each data file holds the cumulative figures at the top level, the parts that
+// change by calendar year under periods[year], and month-by-month DAK and
+// nursery figures under monthly[YYYY-MM]. *_DATA are views for the period chosen.
+let RAW_STATE=null, RAW_DISTRICT=null, RAW_BLOCK=null;
+let PERIOD = 'cumulative';
+function yearKey(){ if(PERIOD==='cumulative' || /^\d{4}$/.test(PERIOD)) return PERIOD; const y = PERIOD.slice(0,4); return (META.period_keys||[]).includes(y) ? y : 'cumulative'; }
+function isMonth(){ return /^\d{4}-\d{2}$/.test(PERIOD); }
+function view(raw){ if(!raw) return null; const y = yearKey(); return (y==='cumulative' || !raw.periods || !raw.periods[y]) ? raw : Object.assign({}, raw, raw.periods[y]); }
+function applyPeriod(){ STATE_DATA = view(RAW_STATE); DISTRICT_DATA = view(RAW_DISTRICT); BLOCK_DATA = view(RAW_BLOCK); }
+function periodText(){
+  if(PERIOD==='cumulative') return 'Cumulative';
+  if(isMonth()) return monthLabel(PERIOD).replace(" '", ' 20');
+  const latest = Math.max(...(META.period_keys||[]).filter(k=>k!=='cumulative').map(Number));
+  return PERIOD + (Number(PERIOD)===latest ? ' (so far)' : '');
+}
+function rawUnit(){ return SCOPE==='block' ? RAW_BLOCK : SCOPE==='district' ? RAW_DISTRICT : RAW_STATE; }
 let SCOPE='state', TAB='overview';
 let META=null, COMPS=[], SCORED_COMPS=[], KPI_BY={}, DEFAULT_W={};
 let W=null;   // current component weights
 const TABS = [{key:'overview', label:'Overview'}];
 
 async function init(){
-  STATE_DATA = await fetchJson('data/state.json');
-  META = STATE_DATA.meta;
+  RAW_STATE = await fetchJson('data/state.json');
+  META = RAW_STATE.meta;
+  STATE_DATA = RAW_STATE;
+  // period selector: cumulative, calendar years, then months
+  const ps = document.getElementById('sel-period');
+  const years = (META.period_keys||[]).filter(k=>k!=='cumulative');
+  const latestY = Math.max(...years.map(Number));
+  ps.innerHTML = `<option value="cumulative">Cumulative</option><optgroup label="Year">${years.map(y=>`<option value="${y}">${y}${Number(y)===latestY?' (so far)':''}</option>`).join('')}</optgroup>`
+    + `<optgroup label="Month (DAK and Nursery figures)">${[...(META.months||[])].reverse().map(m=>`<option value="${m}">${monthLabel(m).replace(" '", ' 20')}</option>`).join('')}</optgroup>`;
+  try{ const sp = localStorage.getItem('sd-period'); if(sp && [...ps.options].some(o=>o.value===sp)) PERIOD = sp; }catch(e){}
+  ps.value = PERIOD;
+  ps.addEventListener('change', e=>{ PERIOD = e.target.value; try{ localStorage.setItem('sd-period', PERIOD); }catch(_){} SCORING_SUMMARY_P=null; applyPeriod(); refreshView(); });
+  applyPeriod();
   COMPS = META.components;
   META.kpis.forEach(k=> KPI_BY[k.key]=k);
   SCORED_COMPS = COMPS.filter(c=> META.kpis.some(k=>k.component===c.key));
   COMPS.forEach(c=>{ DEFAULT_W[c.key] = c.weight!=null ? c.weight : 1; TABS.push({key:c.key, label:c.label}); });
   TABS.push({key:'score', label:'SD Index'});
-  TABS.push({key:'checks', label:'Data Checks'});
+  TABS.push({key:'checks', label:'Discrepancy Report'});
   W = {...DEFAULT_W};
   // "last updated" strip: newest scrape across sources, with a per-source list
   if(META.sources){
@@ -391,17 +424,17 @@ function currentUnit(){ return SCOPE==='block' ? BLOCK_DATA : SCOPE==='district'
 async function onDistrictChange(slug){
   const bSel = document.getElementById('sel-block');
   document.getElementById('sel-district').value = slug;
-  if(!slug){ bSel.innerHTML='<option value="">— Whole district —</option>'; bSel.disabled=true; DISTRICT_DATA=null; BLOCK_DATA=null; SCOPE='state'; refreshView(); return; }
-  DISTRICT_DATA = await fetchJson(`data/districts/${slug}.json`);
+  if(!slug){ bSel.innerHTML='<option value="">— Whole district —</option>'; bSel.disabled=true; RAW_DISTRICT=null; RAW_BLOCK=null; applyPeriod(); SCOPE='state'; refreshView(); return; }
+  RAW_DISTRICT = await fetchJson(`data/districts/${slug}.json`); RAW_BLOCK = null; applyPeriod();
   const manDist = MANIFEST.districts.find(d=>d.slug===slug);
   bSel.innerHTML = `<option value="">— Whole district —</option>` + manDist.blocks.map(b=>`<option value="${b.slug}">${b.name}</option>`).join('');
   bSel.disabled = false;
-  BLOCK_DATA=null; SCOPE='district'; refreshView();
+  SCOPE='district'; refreshView();
 }
 async function onBlockChange(slug){
   document.getElementById('sel-block').value = slug;
-  if(!slug){ BLOCK_DATA=null; SCOPE='district'; refreshView(); return; }
-  BLOCK_DATA = await fetchJson(`data/blocks/${slug}.json`);
+  if(!slug){ RAW_BLOCK=null; applyPeriod(); SCOPE='district'; refreshView(); return; }
+  RAW_BLOCK = await fetchJson(`data/blocks/${slug}.json`); applyPeriod();
   SCOPE='block'; refreshView();
 }
 async function navToDistrict(slug){ await onDistrictChange(slug); window.scrollTo({top:0}); }
@@ -544,10 +577,11 @@ function byIndex(a, b){
   return String(a.name).localeCompare(String(b.name));
 }
 function unitOverall(u){ return isDefaultW() ? u.overall_score : wOverall(u.comp_scores); }
-async function ensureScoringSummary(){ if(!SCORING_SUMMARY) SCORING_SUMMARY = await fetchJson('data/scoring_summary.json'); return SCORING_SUMMARY; }
+let SCORING_SUMMARY_P = null;
+async function ensureScoringSummary(){ if(!SCORING_SUMMARY) SCORING_SUMMARY = await fetchJson('data/scoring_summary.json'); return (SCORING_SUMMARY.periods||{})[yearKey()] || SCORING_SUMMARY.periods.cumulative; }
 function weightLine(){
   const tot = COMPS.reduce((a,c)=>a+W[c.key],0) || 1;
-  return COMPS.map(c=>`${c.label} ${Math.round(W[c.key]/tot*100)}%`).join(' &middot; ');
+  return COMPS.map(c=> W[c.key] ? `${c.label} ${Math.round(W[c.key]/tot*100)}%` : `${c.label} (weight to be agreed)`).join(' &middot; ');
 }
 function openWeightModal(){
   const ex = document.getElementById('weight-modal-backdrop'); if(ex) ex.remove();
@@ -713,13 +747,37 @@ function glanceCards(u){
     {k:'plantation', lab:'Plantation', v: fmtPct(u.plantation.survival,0), c:'of plants given in 2025-26 still alive', s:u.comp_scores.plantation, f:sc(u,'pl_surv')},
     {k:'disability', lab:'Disability SHGs', v: fmtPct(dis.target_pct,0), c:`of target met &middot; ${fmtNum(dis.pwd.n)} of ${fmtNum(dis.target)} SHGs`, s:u.comp_scores.disability, f:sc(u,'pwd_target')},
     {k:'secondchance', lab:'Second Chance', v:'<span class="awaited">Data awaited</span>', c:'enrolment and exam results will appear here', s:null, none:true},
+    {k:'budget', lab:'Budget', v:'<span class="awaited">Data pending</span>', c:'district budget allocated and how much was used', s:null, none:true},
   ];
   return `<div class="glance">${cards.map(o=>`<button class="gcard ${o.none?'':bucket(o.f)}${o.idx?' index':''}" data-go="${o.k}">
       <div class="gh"><span class="gname">${o.lab}</span>${o.none||o.idx?'':`<span class="pill ${bucket(o.s)}" title="${isState?'component score of the median block':'component score out of 100'}">score ${o.s==null?'—':fmtScore(o.s)}</span>`}</div>
       <div class="gv">${o.v}</div><div class="gc">${o.c}</div></button>`).join('')}</div>`;
 }
+// When a month is chosen: DAK and nursery show that month's own figures;
+// everything else (and all scores) uses the calendar year the month is in.
+function monthBanner(comp){
+  const raw = rawUnit(), m = raw && raw.monthly ? raw.monthly[PERIOD] : null;
+  const yr = yearKey()==='cumulative' ? 'cumulative figures' : yearKey();
+  const intro = `<p class="disclaimer" style="margin:0 0 12px;">Monthly figures exist only for DAK and Nursery. Scores and every other figure on this page are for <b>${esc(yr)}</b>.</p>`;
+  if(!m) return section(`${esc(periodText())}`, '', intro, false);
+  let t = '';
+  if(comp==='dak' || comp==='overview'){
+    const rr = (a)=> a[0] ? fmtPct(a[1]/a[0]*100,0)+' resolved so far' : '';
+    t += `<div class="subhead">Gender (DAK) in ${esc(periodText())}</div>` + tiles([
+      tile('Entitlement cases', fmtNum(m.ent[0]), rr(m.ent)), tile('Gender-violence cases', fmtNum(m.gbv[0]), rr(m.gbv)),
+      tile('Alternate-service transactions', m.alt?fmtNum(m.alt[0]):'—', m.alt?`${fmtRs(m.alt[1])} &middot; ${m.alt[2]} service${m.alt[2]===1?'':'s'}`:'month not scraped')]);
+  }
+  if(comp==='nursery' || comp==='overview'){
+    t += `<div class="subhead" style="margin-top:${comp==='overview'?18:0}px;">Nursery in ${esc(periodText())}</div>` + (m.nur ? tiles([
+      tile('Plants sold', fmtNum(m.nur[0])), tile('Value sold', fmtRs(m.nur[1])),
+      tile('Paid', fmtRs(m.nur[2]), m.nur[1]?`${fmtPct(m.nur[2]/m.nur[1]*100,0)} of value sold`:''), tile('Plants in stock', fmtNum(m.nur[4]), 'end of month')]) : '<p class="disclaimer">No nursery report for this month.</p>');
+  }
+  if(!t) return section(`${esc(periodText())}`, '', intro, false);
+  return `<section><div class="month-panel">${intro}${t}</div></section>`;
+}
 function overviewHtml(u){
-  let h = `<div class="page-title"><h2 class="serif">${esc(scopeName())}</h2><span class="hint">${SCOPE==='state'?'All 38 districts and 534 blocks':'Social development at a glance'} &middot; click a card to open it</span></div>`;
+  let h = `<div class="page-title"><h2 class="serif">${esc(scopeName())}</h2><span class="hint">${esc(periodText())} &middot; ${SCOPE==='state'?'All 38 districts and 534 blocks':'Social development at a glance'} &middot; click a card to open it</span></div>`;
+  if(isMonth()) h += monthBanner('overview');
   h += section('At a Glance', 'card colour = how the figure shown scores &middot; pill = the component score' + (SCOPE==='state'?' (median block)':''), glanceCards(u), true);
   AFTER.push(()=> document.querySelectorAll('[data-go]').forEach(b=> b.addEventListener('click', ()=> setTab(b.dataset.go))));
   if(SCOPE==='state') h += explore(STATE_DATA.districts, overallOptions(), true, r=>navToDistrict(r.slug), {detail:compDetail});
@@ -734,13 +792,13 @@ function overviewHtml(u){
 function compRowsExpandable(u){
   const tot = COMPS.reduce((a,x)=>a+W[x.key],0)||1;
   return COMPS.map(c=>{ const v = u.comp_scores[c.key], has = SCORED_COMPS.some(s=>s.key===c.key);
-    return `<details class="cx"><summary><span class="sl">${c.label}<small>weight ${Math.round(W[c.key]/tot*100)}%${has?'':' &middot; data awaited'}</small></span>
+    return `<details class="cx"><summary><span class="sl">${c.label}<small>${W[c.key] ? 'weight '+Math.round(W[c.key]/tot*100)+'%' : 'weight to be agreed'}${has?'':' &middot; data pending'}</small></span>
       <div class="track"><div class="fill ${bucket(v)}" style="width:${v==null?0:Math.max(2,v)}%"></div></div><span class="sv" style="color:${v==null?'var(--ink-soft)':COLORS[bucket(v)]}">${has?fmtScore(v):'—'}</span><span class="chev">&#9654;</span></summary>
-      <div class="cx-body">${has ? (SCOPE==='state'?distBar(STATE_DATA.dist['comp_'+c.key]):'') + kpiRows(c.key, u) : '<p class="disclaimer" style="margin:0;">Scored on enrolment coverage (enrolled ÷ target population) and pass rate (passed ÷ sat the exam) once programme data arrives.</p>'}</div></details>`; }).join('')
+      <div class="cx-body">${has ? (SCOPE==='state'?distBar(STATE_DATA.dist['comp_'+c.key]):'') + kpiRows(c.key, u) : `<p class="disclaimer" style="margin:0;">${c.key==='budget' ? 'Budget data pending. It will be scored on how much of the allocated budget was used, once the data and its weight are agreed.' : 'Scored on enrolment coverage (enrolled ÷ target population) and pass rate (passed ÷ sat the exam) once programme data arrives.'}</p>`}</div></details>`; }).join('')
     + `<p class="disclaimer">Click a component to see the metrics behind its score.</p>`;
 }
 function scorecardHtml(u){
-  let h = `<div class="page-title"><h2 class="serif">Social Development Index &mdash; ${esc(scopeName())}</h2><span class="hint">weighted average of the component scores &middot; components a place has no score for are left out and the other weights rescaled</span></div>`;
+  let h = `<div class="page-title"><h2 class="serif">Social Development Index &mdash; ${esc(scopeName())}</h2><span class="hint">${esc(isMonth() ? yearKey()+' (the year of '+periodText()+')' : periodText())} &middot; weighted average of the component scores &middot; components a place has no score for are left out and the other weights rescaled</span></div>`;
   const ov = unitOverall(u);
   let standing;
   if(SCOPE==='state') standing = `<div style="margin-top:14px;">${distBar(STATE_DATA.dist.overall)}</div>`;
@@ -807,7 +865,7 @@ function drawPerf(id){
       const v = c.val(r);
       if(c.key==='rank') return `<td class="rk">${v==null?'–':v}</td>`;
       if(c.key==='name') return `<td class="nm"><a class="${cls(ov(r))}" data-slug="${r.slug}" title="SD Index ${fmtScore(ov(r))}">${esc(r.name)}</a></td>`;
-      if(c.key==='secondchance') return `<td class="num"><span class="hint">awaited</span></td>`;
+      if(c.key==='secondchance' || c.key==='budget') return `<td class="num"><span class="hint">pending</span></td>`;
       return `<td class="num${c.idx?' idx':''} ${cls(v)}">${v==null?'<span class="hint">no data</span>':Math.round(v)}</td>`;
     }).join('')}</tr>`).join('')}</tbody>`;
   t.querySelectorAll('th').forEach(th=> th.addEventListener('click', ()=>{
@@ -870,8 +928,10 @@ function scorePanel(comp, u){
 }
 function componentHtml(comp, u){
   const c = COMPS.find(x=>x.key===comp);
-  let h = `<div class="page-title"><h2 class="serif">${c.label} &mdash; ${esc(scopeName())}</h2><span class="hint">${esc(META.periods[comp]||'')}</span></div>`;
-  if(comp==='secondchance') return h + RENDER[comp](u) + footer();
+  const pn = ((META.period_notes||{})[yearKey()]||{})[comp] || META.periods[comp] || '';
+  let h = `<div class="page-title"><h2 class="serif">${c.label} &mdash; ${esc(scopeName())}</h2><span class="hint">${esc(periodText())} &middot; ${esc(pn)}</span></div>`;
+  if(isMonth()) h += monthBanner(comp);
+  if(comp==='secondchance' || comp==='budget') return h + RENDER[comp](u) + footer();
   h += scorePanel(comp, u);
   h += RENDER[comp](u);
   const opts = compOptions(comp), det = {detail:kpiDetail(comp)};
@@ -956,9 +1016,9 @@ const RENDER = {
   nursery(u){
     const n = u.nursery, sl = n.stock_latest, sp = n.stock_peak;
     let h = section('Nurseries', SCOPE==='block' ? 'target: 3 nurseries per block' : `${fmtNum(n.blocks_meeting)} of ${fmtNum(n.n_blocks)} blocks have 3 or more`, `<div class="grid2">
-      ${card(tiles([tile('Nurseries', `${fmtNum(n.nurseries)} / ${fmtNum(n.target)}`, `${fmtNum(n.gap)} more needed for the target`, sc(u,'nur_target')), tile('Plants sold', fmtNum(n.sold_fy), n.nurseries?`${fmtNum(n.sales_per_nursery)} per nursery, FY 25-26`:'no nursery', sc(u,'nur_sales'))])
+      ${card(tiles([tile('Nurseries', `${fmtNum(n.nurseries)} / ${fmtNum(n.target)}`, `${fmtNum(n.gap)} more needed for the target`, sc(u,'nur_target')), tile('Plants sold', fmtNum(n.sold_fy), n.nurseries?`${fmtNum(n.sales_per_nursery)} per nursery, ${esc(periodText())}`:'no nursery', sc(u,'nur_sales'))])
         + `<div style="margin-top:18px;" class="subhead">Linked to</div>${stack([{label:'MGNREGA', pct:n.nurseries?n.mgnrega/n.nurseries*100:0},{label:'Forest Dept', pct:n.nurseries?n.forest/n.nurseries*100:0},{label:'Not linked', pct:n.nurseries?n.unlinked/n.nurseries*100:0}].filter(x=>x.pct>0))}`)}
-      ${card(tiles([tile('Value sold', fmtRs(n.sale_value), 'FY 2025-26'), tile('Paid', fmtRs(n.received), n.paid_rate!=null?`${fmtPct(n.paid_rate,0)} of value sold`:'', sc(u,'nur_paid'))])
+      ${card(tiles([tile('Value sold', fmtRs(n.sale_value), esc(isMonth()?yearKey():periodText())), tile('Paid', fmtRs(n.received), n.paid_rate!=null?`${fmtPct(n.paid_rate,0)} of value sold`:'', sc(u,'nur_paid'))])
         + `<div style="margin-top:18px;">${stack([{label:'Paid', pct:n.sale_value?n.received/n.sale_value*100:0},{label:'Pending', pct:n.sale_value?n.pending/n.sale_value*100:0}], ['#2F9C74','#CE9C3C'])}</div>`
         + `<p class="disclaimer">${esc(META.periods.nursery_excluded||'')}</p>`, 'Money from sales')}
     </div>`, true);
@@ -1013,6 +1073,11 @@ const RENDER = {
       plot('pwd-years', [{x:f.map(x=>String(x.year)), y:f.map(x=>x.n), type:'bar', marker:{color:'#2F9C74'}, hovertemplate:'%{x}: %{y} formed<extra></extra>'}], {height:190, margin:{t:4,b:30,l:40,r:8}, xaxis:{type:'category'}}); });
     return h;
   },
+  budget(u){
+    return section('Budget', 'district budget allocated, and how much of it was used', tiles([
+      tile('Budget allocated', '<span class="awaited">Data pending</span>'), tile('Budget used', '<span class="awaited">Data pending</span>'), tile('Share used', '<span class="awaited">Data pending</span>')])
+      + `<p class="disclaimer">District-level budget data will be added here when it arrives. It is not part of the SD Index until its weight is agreed.</p>`);
+  },
   secondchance(u){
     const s = u.secondchance;
     return section('Programme Results', 'BBOSE Class 10 through Second Chance', tiles([
@@ -1041,7 +1106,7 @@ async function renderChecks(){
   if(SCOPE==='block') flags = flags.filter(f=> f.level==='block' && f.id===BLOCK_DATA.block_id);
   const nErr = flags.filter(f=>f.sev==='error').length, nChk = flags.length - nErr;
   const places = new Set(flags.filter(f=>f.level==='block').map(f=>f.id)).size;
-  let h = `<div class="page-title"><h2 class="serif">Data Checks &mdash; ${esc(scopeName())}</h2><span class="hint">entries that look wrong, to follow up with the block or district team</span></div>`;
+  let h = `<div class="page-title"><h2 class="serif">Discrepancy Report &mdash; ${esc(scopeName())}</h2><span class="hint">entries that look wrong, to follow up with the block or district team</span></div>`;
   h += section('How Entries Are Flagged', '', `<div class="grid2">
     <div><span class="sev error">Error</span><p class="disclaimer" style="margin-top:8px;">A value that cannot be right: more plants alive than were given, a case resolved before it was filed, a sale with no plants, a VRF corpus smaller than the grant received. Flagged wherever it occurs.</p></div>
     <div><span class="sev check">Check</span><p class="disclaimer" style="margin-top:8px;">A value far from what other places report, high or low. "Far" means more than ${CHECKS.z} typical deviations from the median (a robust z-score), so a few extreme entries can't hide each other, and nothing is flagged when the data is clean. Only used for metrics where an extreme value suggests a recording problem, not good performance.</p></div></div>`);
@@ -1091,7 +1156,7 @@ async function renderChecks(){
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Flags');
     if(SCOPE==='state') XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(CHECKS.source_issues.map(s=>({Component:compLabel(s.c), Issue:s.issue, Detail:s.detail}))), 'Source-wide issues');
-    XLSX.writeFile(wb, `SD_Data_Checks_${scopeName().replace(/[^A-Za-z0-9]+/g,'_')}.xlsx`);
+    XLSX.writeFile(wb, `SD_Discrepancy_Report_${scopeName().replace(/[^A-Za-z0-9]+/g,'_')}.xlsx`);
   });
   draw();
   document.querySelectorAll('.btn-open-weights').forEach(b=> b.addEventListener('click', openWeightModal));
@@ -1106,7 +1171,8 @@ async function exportToExcel(mode){
   btn.disabled=true; btn.innerHTML='Preparing…';
   try{
     if(!EXPORT_DATA) EXPORT_DATA = await fetchJson('data/export_data.json');
-    let blocks = EXPORT_DATA.blocks, districts = EXPORT_DATA.districts, tag = 'Bihar';
+    const E = (EXPORT_DATA.periods||{})[yearKey()] || EXPORT_DATA.periods.cumulative;
+    let blocks = E.blocks, districts = E.districts, tag = 'Bihar_' + (yearKey()==='cumulative' ? 'Cumulative' : yearKey());
     if(mode==='view' && SCOPE==='district'){ blocks = blocks.filter(r=>r.district===DISTRICT_DATA.name); districts = districts.filter(r=>r.name===DISTRICT_DATA.name); tag = DISTRICT_DATA.name; }
     if(mode==='view' && SCOPE==='block'){ blocks = blocks.filter(r=>r.block_id===BLOCK_DATA.block_id); districts = districts.filter(r=>r.name===DISTRICT_DATA.name); tag = DISTRICT_DATA.name+'_'+BLOCK_DATA.name; }
     const defs = META.kpis.map(k=>({Component: COMPS.find(c=>c.key===k.component).label, Metric:k.label, 'Scored as': k.type==='target'?'% of target':'percentile', Definition:k.desc}));

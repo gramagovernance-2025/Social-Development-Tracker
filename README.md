@@ -30,13 +30,22 @@ Then open http://localhost:8765/dasboard.html. Double-clicking `dasboard.html` a
 
 ## Layout
 
-Tabs: Overview, one tab per component (Gender (DAK), VRF, VPRP, Nursery, Plantation, Disability SHGs, Second Chance), then **SD Index**. Each component tab opens with that component's score and the score of each metric behind it, followed by the detail and a map and ranking. The SD Index tab combines the components. Click any component there to see its metrics.
+Tabs: Overview, one tab per component (Gender (DAK), VRF, VPRP, Nursery, Plantation, Disability SHGs, Second Chance, Budget), then **SD Index** and **Discrepancy Report**. Budget is a placeholder with weight 0 until its district data and weight are agreed. Each component tab opens with that component's score and the score of each metric behind it, followed by the detail and a map and ranking. The SD Index tab combines the components. Click any component there to see its metrics.
 
-## Data Checks tab and "last updated"
+## Period selector
+
+There are three choices: **Cumulative**, calendar years (**2026 so far**, **2025**), and months. These are calendar years, like the DAK tracker. The build computes every metric, score and rank for each of the three periods (`periods` in each JSON file; cumulative is the top level).
+- **DAK cases and alternate services** are counted by month. **Nursery** sales, payments and stock come from the monthly reports.
+- **VPRP** is yearly: each calendar year shows that year's plan, and 2026 shows the 2025 plan until 2026 plans exist.
+- **Plantation** is by season: 2025 shows the 2025-26 season, and 2026 shows 2025-26 until 2026-27 data exists.
+- **VRF, disability and Second Chance** have no history, so they are the same in every period.
+- **Months:** DAK and Nursery show that month's own figures in a panel at the top of the tab (`monthly`). Scores and everything else use the calendar year the month falls in.
+
+## Discrepancy Report tab and "last updated"
 
 The header shows when the newest source was last scraped, with a per-source list (taken from file dates when the build runs).
 
-The **Data Checks** tab lists entries that look wrong, at block and district level, for follow-up with field teams (`data/checks.json`):
+The **Discrepancy Report** tab lists entries that look wrong, at block and district level, for follow-up with field teams (`data/checks.json`):
 - **Error**: a value that cannot be right. Examples: more plants alive than given, a case resolved before it was filed, a nursery sale with no plants, the same sale value re-entered, over Rs 5,000 per plant, a VRF corpus below the grant received.
 - **Check**: a value far from other places, high or low. Measured as a robust z-score above 3.5 (distance from the median in median-absolute-deviation units). It is used only for metrics where an extreme value suggests a recording problem: case reach, VRF savings discipline, corpus multiplier and interest yield, plants sold per nursery, plantation survival and reach. Also flagged here: DAKs with no cases, resolved cases with no details, VRF savings over 3 times the expected amount, sales larger than the previous month's stock, species not adding up to the total, more VOs filing than are active, and disability SHGs where no member is recorded as disabled.
 

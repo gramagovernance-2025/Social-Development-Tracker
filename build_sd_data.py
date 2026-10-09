@@ -174,7 +174,9 @@ sp["month"] = sp.Date.dt.to_period("M")
 ALT_END = sp.month.max()
 ALT_WINDOW = pd.period_range(ALT_END - 11, ALT_END, freq="M")
 ALT_AVAIL = sorted(set(sp.month.dropna()) & set(ALT_WINDOW))
-sp = sp[sp.month.isin(ALT_WINDOW)]
+sp = sp[sp.Date.dt.year >= 2025]   # same window as the DAK tracker; periods filter further
+ALT_EXPECTED = pd.period_range(pd.Period("2025-01", freq="M"), ALT_END, freq="M")
+ALT_ALL = sorted(set(sp.month.dropna()))
 sp = attach_block(sp, "District", "Sub District", "DAK alternate services")
 HAS_DAK_FINAL = HAS_DAK
 
@@ -340,7 +342,7 @@ def compute_unit(ids):
 
     # ---------------- DAK
     has_dak = bool(ids & HAS_DAK_FINAL)
-    c = sub(cases, ids)
+    c = sub(PER["cases"], ids)
     dak = {"has_dak": has_dak, "n_daks": int(sub(dak_master, ids).DAK_Name.nunique()) if has_dak else 0}
     for kind in ("ent", "gbv"):
         k = c[c.kind == kind]
@@ -359,11 +361,11 @@ def compute_unit(ids):
     # members of DAK-less blocks would understate how far the DAKs reach
     dak_members = float(MEM.reindex(list(ids & HAS_DAK_FINAL)).active_members.sum())
     dak["cases_per_1000"] = ratio(len(c), dak_members, 1000) if has_dak else None
-    a = sub(sp, ids)
+    a = sub(PER["sp"], ids)
     dak["alt"] = {"transactions": int(a["Total Txn"].sum()), "amount": r1(a["Total Amount"].sum(), 0),
                   "active_vles": int(a["CSC Id"].nunique()), "active_months": int(a.month.nunique()),
                   "n_services": int(a.loc[a["Total Txn"] > 0, "Service"].nunique()),
-                  "months_available": len(ALT_AVAIL),
+                  "months_available": len(PER["alt_months"]),
                   "service_mix": mix(a.groupby("Service")["Total Txn"].sum(), top=6)}
     # Scored KPI (agreed with Mohan, Oct 2026): number of distinct alternate
     # services the DAK offered in the last 12 months - simpler than counting
@@ -400,17 +402,17 @@ def compute_unit(ids):
         anyv = sets["ent"] | sets["pgsrd"] | sets["sdp"]
         by_year.append({"year": int(y), "any": len(anyv), "ent": len(sets["ent"]), "pgsrd": len(sets["pgsrd"]),
                         "sdp": len(sets["sdp"]), "all3": len(sets["ent"] & sets["pgsrd"] & sets["sdp"])})
-    cur = next(b for b in by_year if b["year"] == VPRP_LATEST)
+    cur = next(b for b in by_year if b["year"] == PER["vprp_year"])
     e_all = sub(vent, ids)
-    e = e_all[e_all.year == VPRP_LATEST]
-    e_sc = e_all[e_all.year == SCST_YEAR]
-    sc = sub(vsch, ids); sc = sc[sc.year == VPRP_LATEST]
-    pg = sub(vpg, ids); pg = pg[pg.year == VPRP_LATEST]
-    sd = sub(vsdp, ids); sd = sd[sd.year == VPRP_LATEST]
-    dp = sub(vdep, ids); dp = dp[dp.year == VPRP_LATEST]
+    e = e_all[e_all.year == PER["vprp_year"]]
+    e_sc = e_all[e_all.year == PER["scst_year"]]
+    sc = sub(vsch, ids); sc = sc[sc.year == PER["vprp_year"]]
+    pg = sub(vpg, ids); pg = pg[pg.year == PER["vprp_year"]]
+    sd = sub(vsdp, ids); sd = sd[sd.year == PER["vprp_year"]]
+    dp = sub(vdep, ids); dp = dp[dp.year == PER["vprp_year"]]
     requests = float(e.requests.sum())
     out["vprp"] = {
-        "year": int(VPRP_LATEST), "active_vos": toint(active_vos), "by_year": by_year,
+        "year": int(PER["vprp_year"]), "active_vos": toint(active_vos), "by_year": by_year,
         "requests": toint(requests), "requests_per_100": ratio(requests, active_members, 100),
         "central_mix": mix(sc[sc.central].groupby("scheme_type").n.sum().rename(index=CENTRAL), top=10),
         "state_mix": mix(sc[~sc.central].groupby("scheme_type").n.sum(), top=5),
@@ -423,18 +425,20 @@ def compute_unit(ids):
         "departments": mix(dp.groupby("department").n.sum(), top=10),
         "coverage": min(100.0, ratio(cur["any"], active_vos)) if ratio(cur["any"], active_vos) is not None else None,
         "sdp_filed": min(100.0, ratio(cur["sdp"], active_vos)) if ratio(cur["sdp"], active_vos) is not None else None,
-        "scst_reach": ratio(e_sc.scst_requesters.sum(), m.scst_members), "scst_year": SCST_YEAR,
+        "scst_reach": ratio(e_sc.scst_requesters.sum(), m.scst_members), "scst_year": PER["scst_year"],
         "scst_requesters": toint(e_sc.scst_requesters.sum()), "scst_members": toint(m.scst_members),
     }
 
     # ---------------- Nursery
-    n_all = sub(nm, ids)
-    n_latest = n_all[n_all.ym == NUR_LATEST]
-    n_fy = sub(nmf, ids)
+    n_all = sub(PER["nm"], ids)                 # rows in this period
+    n_latest = n_all[n_all.ym == PER["nur_latest"]]
+    n_fy = n_all
+    n_full = sub(nm, ids)                       # every month, for the trend chart
     nurs = int(n_latest.nurs.sum()); mg = int(n_latest.mgnrega.sum()); fo = int(n_latest.forest.sum())
     n_blocks = len(ids)
-    monthly = n_all.groupby("ym")[["sold_m", "fruit", "timber", "bio", "total", "sale_val", "recv"]].sum()
-    peak_ym = monthly.loc[[x for x in monthly.index if NUR_FY[0] <= x <= NUR_FY[1]], "total"].idxmax() if len(monthly) else None
+    monthly = n_full.groupby("ym")[["sold_m", "fruit", "timber", "bio", "total", "sale_val", "recv"]].sum()
+    _pm = n_all.groupby("ym")[["fruit", "timber", "bio", "total"]].sum()
+    peak_ym = _pm.total.idxmax() if len(_pm) else None
     nwb = sub(nw, ids)
     sold_fy = float(n_fy.sold_m.sum())
     nlist = []
@@ -447,11 +451,11 @@ def compute_unit(ids):
         "nurseries": nurs, "mgnrega": mg, "forest": fo, "unlinked": max(0, nurs - mg - fo),
         "target": 3 * n_blocks, "gap": int(sum(max(0, 3 - x) for x in n_latest.groupby("block_id").nurs.sum().reindex(list(ids)).fillna(0))),
         "blocks_meeting": int((n_latest.groupby("block_id").nurs.sum() >= 3).sum()), "n_blocks": n_blocks,
-        "stock_latest": {"month": NUR_LATEST, "fruit": toint(n_latest.fruit.sum()), "timber": toint(n_latest.timber.sum()),
+        "stock_latest": {"month": PER["nur_latest"], "fruit": toint(n_latest.fruit.sum()), "timber": toint(n_latest.timber.sum()),
                          "bio": toint(n_latest.bio.sum()), "total": toint(n_latest.total.sum())},
-        "stock_peak": None if peak_ym is None else {"month": peak_ym, "fruit": toint(monthly.loc[peak_ym, "fruit"]),
-                       "timber": toint(monthly.loc[peak_ym, "timber"]), "bio": toint(monthly.loc[peak_ym, "bio"]),
-                       "total": toint(monthly.loc[peak_ym, "total"])},
+        "stock_peak": None if peak_ym is None else {"month": peak_ym, "fruit": toint(_pm.loc[peak_ym, "fruit"]),
+                       "timber": toint(_pm.loc[peak_ym, "timber"]), "bio": toint(_pm.loc[peak_ym, "bio"]),
+                       "total": toint(_pm.loc[peak_ym, "total"])},
         "monthly": {"months": list(monthly.index), "sold": [toint(x) for x in monthly.sold_m],
                     "stock": [toint(x) for x in monthly.total]},
         "sold_fy": toint(sold_fy), "sale_value": r1(n_fy.sale_val.sum(), 0), "received": r1(n_fy.recv.sum(), 0),
@@ -473,8 +477,8 @@ def compute_unit(ids):
         pl["years"][y] = {"distributed": toint(dist), "alive": toint(lv), "requested": toint(rq.Total.sum()) if len(rq) else None,
                           "survival": min(100.0, ratio(lv, dist)) if ratio(lv, dist) is not None else None,
                           "has_data": bool(len(dt))}
-    dt = sub(PL_DIST[PL_CUR], ids)[SPECIES].sum()
-    rq = sub(PL_REQ[PL_CUR], ids)[SPECIES].sum() if len(sub(PL_REQ[PL_CUR], ids)) else pd.Series(0, index=SPECIES)
+    dt = sub(PL_DIST[PER["pl_cur"]], ids)[SPECIES].sum()
+    rq = sub(PL_REQ[PER["pl_cur"]], ids)[SPECIES].sum() if len(sub(PL_REQ[PER["pl_cur"]], ids)) else pd.Series(0, index=SPECIES)
     tot = dt.sum()
     pl["group_mix"] = mix(pd.Series({"Fruit": dt[FRUIT].sum(), "Timber / shade": dt[[s for s in SPECIES if s not in FRUIT + SACRED + ["Others"]]].sum(),
                                      "Sacred (peepal, banyan)": dt[SACRED].sum(), "Other species": dt.get("Others", 0)}))
@@ -483,11 +487,12 @@ def compute_unit(ids):
     pl["req_vs_dist"] = [{"label": SPECIES_LABEL.get(s, s), "requested_pct": r1(rq[s] / rq_tot * 100) if rq_tot else None,
                           "distributed_pct": r1(dt[s] / tot * 100) if tot else None}
                          for s in rq.sort_values(ascending=False).index[:10] if s != "Others"]
-    cs, ps = pl["years"][PL_CUR]["survival"], pl["years"][PL_PREV]["survival"]
+    cs = pl["years"][PER["pl_cur"]]["survival"]
+    ps = pl["years"][PER["pl_prev"]]["survival"] if PER["pl_prev"] else None
     pl["survival_change"] = r1(cs - ps) if cs is not None and ps is not None else None
     pl["survival"] = cs
-    pl["reach"] = ratio(pl["years"][PL_CUR]["distributed"], active_members, 100) if pl["years"][PL_CUR]["has_data"] else None
-    pl["has_data"] = pl["years"][PL_CUR]["has_data"]
+    pl["reach"] = ratio(pl["years"][PER["pl_cur"]]["distributed"], active_members, 100) if pl["years"][PER["pl_cur"]]["has_data"] else None
+    pl["has_data"] = pl["years"][PER["pl_cur"]]["has_data"]
     out["plantation"] = pl
 
     # ---------------- Disability + other special SHGs
@@ -528,6 +533,75 @@ def compute_unit(ids):
                            "tp35_scst": tp(["lt25", "25_30", "30_35"], "SCST"), "tp35_obc": tp(["lt25", "25_30", "30_35"], "OBC"),
                            "enrolled": None, "appeared": None, "passed": None}
     out["active_members"] = toint(active_members)
+    out["pl_season"] = PER["pl_cur"]
+    return out
+
+# ============================================================================ periods
+# Calendar years, like the DAK tracker: "cumulative" (everything), 2026, 2025.
+# Sources that do not change over time (VRF, disability, Second Chance) look
+# the same in every period. VPRP plans and VanMitra seasons are yearly: a
+# calendar year shows that year's plan / the season planted that year, and the
+# latest available when the year has none yet (labelled on the page).
+YEARS = [2026, 2025]
+PERIODS = ["cumulative"] + [str(y) for y in YEARS]
+PL_SEASONS = list(PLY)                          # ["2024-25", "2025-26"]
+
+def make_period(p):
+    if p == "cumulative":
+        cs, s_, n_ = cases, sp, nm
+        vy, plc = VPRP_LATEST, PL_CUR
+    else:
+        y = int(p)
+        cs, s_, n_ = cases[cases.app.dt.year == y], sp[sp.Date.dt.year == y], nm[nm.date.dt.year == y]
+        vy = y if y in VPRP_YEARS else VPRP_LATEST
+        season = f"{y}-{str(y + 1)[2:]}"
+        plc = season if season in PL_SEASONS else PL_CUR
+    i = PL_SEASONS.index(plc)
+    return {"key": p, "cases": cs, "sp": s_, "nm": n_, "nur_latest": n_.ym.max() if len(n_) else NUR_LATEST,
+            "alt_months": sorted(set(s_.month.dropna())), "vprp_year": int(vy), "scst_year": int(min(SCST_YEAR, vy)),
+            "pl_cur": plc, "pl_prev": PL_SEASONS[i - 1] if i > 0 else None}
+
+PER = make_period("cumulative")
+
+def period_notes(p):
+    per = make_period(p)
+    latest_year = max(YEARS)
+    so_far = " (so far)" if p == str(latest_year) else ""
+    lm = pd.Period(per["nur_latest"]).strftime("%b %Y")
+    n = {}
+    if p == "cumulative":
+        n["dak"] = f"All cases registered up to {DATA_DATE:%d %b %Y}; alternate services since Jan 2025 ({len(ALT_ALL)} of {len(ALT_EXPECTED)} months scraped)"
+        n["nursery"] = f"Sales and payments Jan 2025 – {pd.Period(NUR_LATEST).strftime('%b %Y')}; stock as of {lm}"
+    else:
+        n["dak"] = f"Cases registered in {p}{so_far}; alternate services in {p} ({len(per['alt_months'])} months with data)"
+        n["nursery"] = f"Sales and payments in {p}{so_far}; stock as of {lm}"
+    vy = per["vprp_year"]
+    n["vprp"] = f"Plan year {vy}" + (f" (no {p} plans yet)" if p != "cumulative" and int(p) != vy else "") + f"; SC/ST reach uses {per['scst_year']}"
+    n["plantation"] = f"{per['pl_cur']} planting season" + (f" (no {p}-{str(int(p) + 1)[2:]} data yet)" if p != "cumulative" and per["pl_cur"] != f"{p}-{str(int(p) + 1)[2:]}" else "") + \
+        (f"; compared with {per['pl_prev']}" if per["pl_prev"] else "")
+    n["vrf"] = "Current position of every VO (no history: the same in every period)"
+    n["disability"] = "Current SHGs and members from LokOS (no history: the same in every period)"
+    n["secondchance"] = "Target population from LokOS member education and age; programme data awaited"
+    n["budget"] = "District budget allocated and used; data pending"
+    return n
+
+MONTH_KEYS = [str(m) for m in pd.period_range("2025-01", max(pd.Period(NUR_LATEST), ALT_END, pd.Period(DATA_DATE, "M")), freq="M")]
+def monthly_for(ids):
+    """Month-by-month DAK and nursery figures (the only sources that report monthly)."""
+    ids = set(ids)
+    c = sub(cases, ids); c = c[c.app.dt.year >= 2025]
+    gc = c.assign(ym=c.app.dt.strftime("%Y-%m")).groupby(["ym", "kind"]).agg(rec=("Case_ID", "size"), res=("resolved", "sum"))
+    a = sub(sp, ids)
+    ga = a.assign(ym=a.month.astype(str)).groupby("ym").agg(txn=("Total Txn", "sum"), amt=("Total Amount", "sum"), svc=("Service", "nunique"))
+    n_ = sub(nm, ids)
+    gn = n_.groupby("ym").agg(sold=("sold_m", "sum"), val=("sale_val", "sum"), recv=("recv", "sum"), due=("due", "sum"), stock=("total", "sum"))
+    out = {}
+    for ym in MONTH_KEYS:
+        def cv(kind, col):
+            return int(gc.loc[(ym, kind), col]) if (ym, kind) in gc.index else 0
+        out[ym] = {"ent": [cv("ent", "rec"), cv("ent", "res")], "gbv": [cv("gbv", "rec"), cv("gbv", "res")],
+                   "alt": [int(ga.loc[ym, "txn"]), r1(ga.loc[ym, "amt"], 0), int(ga.loc[ym, "svc"])] if ym in ga.index else ([0, 0, 0] if pd.Period(ym) in set(ALT_ALL) else None),
+                   "nur": [int(gn.loc[ym, "sold"]), r1(gn.loc[ym, "val"], 0), r1(gn.loc[ym, "recv"], 0), r1(gn.loc[ym, "due"], 0), int(gn.loc[ym, "stock"])] if ym in gn.index else None}
     return out
 
 # Second Chance: dropouts = members whose highest class is primary or middle
@@ -547,6 +621,9 @@ COMPONENTS = [
     {"key": "plantation", "label": "Plantation", "weight": 5},
     {"key": "disability", "label": "Disability SHGs", "weight": 10},
     {"key": "secondchance", "label": "Second Chance", "weight": 20},
+    # District budget allocated vs used: data pending, so not scored yet and
+    # weight 0 until a weight is agreed.
+    {"key": "budget", "label": "Budget", "weight": 0},
 ]
 # key, component, label, unit, scoring type, higher_is_better, getter, description
 KPIS = [
@@ -555,7 +632,7 @@ KPIS = [
     ("dak_gbv", "dak", "Gender-violence case score", "score", "composite", True, None,
      "The same three measures, for gender-based-violence cases"),
     ("dak_alt", "dak", "Alternate services offered", "num", "pctl", True, lambda u: u["dak"]["alt_services"],
-     "Number of different alternate (CSC) services the DAK provided in the last 12 months"),
+     "Number of different alternate (CSC) services the DAK provided in the period"),
     ("dak_reach", "dak", "Case reach", "per1000", "pctl", True, lambda u: u["dak"]["cases_per_1000"],
      "Total DAK cases per 1,000 active SHG members (in blocks with a DAK)"),
     ("vrf_disc", "vrf", "Savings discipline", "pct", "pctl", True, lambda u: u["vrf"] and u["vrf"]["savings_discipline"],
@@ -575,9 +652,9 @@ KPIS = [
     ("nur_target", "nursery", "Nursery target", "pct", "target", True, lambda u: u["nursery"]["target_pct"],
      "Nurseries ÷ 3 per block (capped at 100%)"),
     ("nur_sales", "nursery", "Plants sold per nursery", "num", "pctl", True, lambda u: u["nursery"]["sales_per_nursery"],
-     "Plants sold in FY 2025-26 ÷ number of nurseries (0 if the block has no nursery)"),
+     "Plants sold in the period ÷ number of nurseries (0 if the block has no nursery)"),
     ("nur_paid", "nursery", "Payment received rate", "pct", "pctl", True, lambda u: u["nursery"]["paid_rate"],
-     "Payment received ÷ value of plants sold, FY 2025-26"),
+     "Payment received ÷ value of plants sold in the period"),
     ("pl_surv", "plantation", "Survival rate", "pct", "pctl", True, lambda u: u["plantation"]["survival"],
      "Live plants ÷ plants distributed, 2025-26 (capped at 100%)"),
     ("pl_reach", "plantation", "Plantation reach", "per100", "pctl", True, lambda u: u["plantation"]["reach"],
@@ -774,7 +851,7 @@ def source_issues():
          "detail": "It lists 636 of the 893 nurseries in the monthly report, and its 'dried plants' columns are empty everywhere."},
         {"c": "nursery", "sev": "check", "issue": "Payments are only recorded in the month of sale",
          "detail": "Sale value always equals received + due for that month, so payments that arrive later never appear."},
-        {"c": "dak", "sev": "check", "issue": f"Alternate services cover {len(ALT_AVAIL)} of the last 12 months",
+        {"c": "dak", "sev": "check", "issue": f"Alternate services cover {len(ALT_ALL)} of the {len(ALT_EXPECTED)} months since Jan 2025",
          "detail": "Some monthly CSC exports were never scraped, and only 37 blocks have any activity."},
         {"c": "disability", "sev": "check", "issue": "Disability type defaults to 'Sight'",
          "detail": "LokOS records 'Sight' as the disability type for most members who have no disability, so type is only used for members flagged as disabled."},
@@ -795,24 +872,33 @@ def source_dates():
         {"c": "disability", "source": "LokOS SHG and member profiles", "updated": newest(glob.glob(str(BASE / "2_Data" / "Raw Files" / "Member-Level Profile" / "*.csv")) + [str(CLEAN / "lokos_shg_profiles.dta")]), "covers": "Current SHGs and members"},
     ]
 
-def main():
-    print("Computing blocks")
+def dist(vals):
+    s_ = pd.Series(vals, dtype=float).dropna()
+    if not len(s_):
+        return None
+    return {"median": round(float(s_.median()), 1), "n": int(len(s_)), "green": int((s_ >= 66).sum()),
+            "yellow": int(((s_ >= 33) & (s_ < 66)).sum()), "red": int((s_ < 33).sum())}
+
+def run_period(p):
+    """Compute and score every block, district and the state for one period."""
+    global PER
+    PER = make_period(p)
+    print(f"[{p}] blocks")
     blocks = {}
     for _, b in UNIV.iterrows():
         u = compute_unit([b.block_id])
         u.update({"level": "block", "block_id": b.block_id, "name": b.block_name, "district": b.district_name.title()})
         blocks[b.block_id] = u
     score_units(blocks)
-    print("Computing districts")
+    print(f"[{p}] districts")
     districts = {}
     for d in DISTRICTS:
         ids = UNIV[UNIV.district_norm == d].block_id.tolist()
         u = compute_unit(ids)
-        u.update({"level": "district", "name": d.title().replace("(Bhabua)", "(Bhabua)"), "district_geo_id": d, "n_blocks": len(ids)})
+        u.update({"level": "district", "name": d.title(), "district_geo_id": d, "n_blocks": len(ids)})
         districts[d] = u
     score_units(districts)
-    # within-district block ranks
-    for d in DISTRICTS:
+    for d in DISTRICTS:   # within-district block ranks, no shared places
         ids = UNIV[UNIV.district_norm == d].block_id.tolist()
         ov = pd.Series({i: blocks[i]["overall_score"] for i in ids}, dtype=float)
         srt = pd.Series({i: blocks[i]["overall_sort"] for i in ids}, dtype=float)
@@ -820,20 +906,13 @@ def main():
         for i in ids:
             blocks[i]["overall_district_rank"] = None if math.isnan(rk[i]) else int(rk[i])
             blocks[i]["overall_district_n"] = int(ov.notna().sum())
-    print("Computing state")
+    print(f"[{p}] state")
     state = compute_unit(UNIV.block_id.tolist())
     state.update({"level": "state", "name": "Bihar"})
-    # State has no peers, so KPIs carry values only (no scores)
     # The state has no peers, so its scores describe the TYPICAL BLOCK:
     #  - "target" metrics: the state's own value against the target
     #  - "percentile" metrics, component scores and the SD Index: the median
     #    block score, plus how many blocks fall in each colour band.
-    def dist(vals):
-        s_ = pd.Series(vals, dtype=float).dropna()
-        if not len(s_):
-            return None
-        return {"median": round(float(s_.median()), 1), "n": int(len(s_)), "green": int((s_ >= 66).sum()),
-                "yellow": int(((s_ >= 33) & (s_ < 66)).sum()), "red": int((s_ < 33).sum())}
     state["kpi"], state["dist"] = {}, {}
     for k, c, l, un, t, h, get, d in KPIS:
         val = get(state) if get and state.get(c) is not None else None
@@ -849,16 +928,30 @@ def main():
     dd = dist([blocks[i]["overall_score"] for i in blocks])
     state["dist"]["overall"] = dd
     state["overall_score"] = dd["median"] if dd else None
+    return blocks, districts, state
+
+# parts of a unit that change between periods; everything else is stored once
+VARY = ["dak", "nursery", "plantation", "vprp", "kpi", "comp_scores", "overall_score", "overall_state_rank",
+        "overall_state_n", "overall_sort", "overall_district_rank", "overall_district_n", "active_members", "dist", "pl_season"]
+
+def main():
+    RES = {p: run_period(p) for p in PERIODS}
+    blocks, districts, state = RES["cumulative"]
+    global PER
+    PER = make_period("cumulative")
 
     meta = {
         "components": COMPONENTS, "kpis": KPI_META,
+        "period_keys": PERIODS, "months": MONTH_KEYS,
+        "period_notes": {p_: period_notes(p_) for p_ in PERIODS},
         "periods": {
-            "dak": f"All cases registered up to {DATA_DATE:%d %b %Y}; alternate services {ALT_WINDOW[0].strftime('%b %Y')}–{ALT_END.strftime('%b %Y')} ({len(ALT_AVAIL)} of 12 months scraped)",
+            "dak": f"All cases registered up to {DATA_DATE:%d %b %Y}; alternate services since Jan 2025 ({len(ALT_ALL)} of {len(ALT_EXPECTED)} months scraped)",
             "vrf": "VRF position of every VO, from the latest VRF data (same source as the VRF CLF tracker)",
             "vprp": f"Latest plan year {VPRP_LATEST} (trend {min(VPRP_YEARS)}–{VPRP_LATEST}); SC/ST reach uses {SCST_YEAR}",
-            "nursery": f"Sales and payments FY 2025-26; stock as of {pd.Period(NUR_LATEST).strftime('%b %Y')}",
+            "nursery": f"Sales and payments Jan 2025 – {pd.Period(NUR_LATEST).strftime('%b %Y')}; stock as of {pd.Period(NUR_LATEST).strftime('%b %Y')}",
             "nursery_excluded": f"{NUR_EXCLUDED} implausible money entries (worth Rs {NUR_EXCLUDED_VALUE/1e7:.2f} crore) are left out of the money figures: a sale value with no plants sold and almost nothing paid (including Rs 3 crore for Akorhi Gola, May 2025), the same value re-entered in a later month (a running total carried forward), or more than Rs {NUR_PRICE_CAP:,} per plant. Plants sold still count. The portal only records payment in the month of sale, so payments that arrive later never show up.",
             "plantation": "Survival and reach 2025-26; comparison with 2024-25",
+            "budget": "District budget allocated and used; data pending",
             "disability": "LokOS SHG and member profiles, scraped July 2026",
             "secondchance": "Target population from LokOS member education and age; programme data awaited",
         },
@@ -881,27 +974,45 @@ def main():
         with open(path, "w", encoding="utf8") as f:
             json.dump(obj, f, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=lambda o: None)
 
+    def bslug(i):
+        return slugify(f"{UNIV.set_index('block_id').district_norm[i]}-{RES['cumulative'][0][i]['name']}-{i}")
+    def over(u):
+        return {k: u[k] for k in VARY if k in u}
+    def lists_for(p):
+        # district rows, block rows per district, all block rows, top/bottom for period p
+        bl, di, _ = RES[p]
+        drows, brows_by_d = [], {}
+        for d in DISTRICTS:
+            bids = UNIV[UNIV.district_norm == d].sort_values("block_name").block_id.tolist()
+            brows_by_d[d] = [rank_row(bl[i], {"name": bl[i]["name"], "block_id": i, "slug": bslug(i),
+                                              "overall_district_rank": bl[i]["overall_district_rank"]}) for i in bids]
+            drows.append(rank_row(di[d], {"name": di[d]["name"], "slug": slugify(d), "district_geo_id": d}))
+        allb = [rank_row(bl[i], {"name": bl[i]["name"], "district": bl[i]["district"], "block_id": i, "slug": bslug(i)}) for i in bl]
+        sc_ = sorted([r for r in allb if r["overall_score"] is not None], key=lambda r: -(r["overall_sort"] or 0))
+        return drows, brows_by_d, allb, sc_[:10], sc_[::-1][:10]
+    LISTS = {p: lists_for(p) for p in PERIODS}
     manifest = {"districts": []}
-    district_rows = []
     for d in DISTRICTS:
-        du = districts[d]
         dslug = slugify(d)
-        bids = UNIV[UNIV.district_norm == d].sort_values("block_name").block_id.tolist()
-        brows = [rank_row(blocks[i], {"name": blocks[i]["name"], "block_id": i, "slug": slugify(f"{d}-{blocks[i]['name']}-{i}"),
-                                     "overall_district_rank": blocks[i]["overall_district_rank"]}) for i in bids]
-        du["blocks"] = brows
-        dump(OUT / "districts" / f"{dslug}.json", du)
-        manifest["districts"].append({"slug": dslug, "name": du["name"],
+        brows = LISTS["cumulative"][1][d]
+        dfile = dict(districts[d]); dfile["blocks"] = brows
+        dfile["periods"] = {p: {**over(RES[p][1][d]), "blocks": LISTS[p][1][d]} for p in PERIODS if p != "cumulative"}
+        dfile["monthly"] = monthly_for(UNIV[UNIV.district_norm == d].block_id.tolist())
+        dump(OUT / "districts" / f"{dslug}.json", dfile)
+        manifest["districts"].append({"slug": dslug, "name": districts[d]["name"],
                                       "blocks": [{"slug": r["slug"], "name": r["name"], "block_id": r["block_id"]} for r in brows]})
         for r in brows:
-            dump(OUT / "blocks" / f"{r['slug']}.json", blocks[r["block_id"]])
-        district_rows.append(rank_row(du, {"name": du["name"], "slug": dslug, "district_geo_id": d}))
+            i = r["block_id"]
+            bfile = dict(blocks[i])
+            bfile["periods"] = {p: over(RES[p][0][i]) for p in PERIODS if p != "cumulative"}
+            bfile["monthly"] = monthly_for([i])
+            dump(OUT / "blocks" / f"{r['slug']}.json", bfile)
+    district_rows, _, all_blocks, top_, bot_ = LISTS["cumulative"]
     state["districts"] = district_rows
-    all_blocks = [rank_row(blocks[i], {"name": blocks[i]["name"], "district": blocks[i]["district"], "block_id": i,
-                                       "slug": slugify(f"{blocks[i]['district']}-{blocks[i]['name']}-{i}")}) for i in blocks]
-    scored = [r for r in all_blocks if r["overall_score"] is not None]
-    state["top_blocks"] = sorted(scored, key=lambda r: -r["overall_score"])[:10]
-    state["bottom_blocks"] = sorted(scored, key=lambda r: r["overall_score"])[:10]
+    state["top_blocks"], state["bottom_blocks"] = top_, bot_
+    state["periods"] = {p: {**over(RES[p][2]), "districts": LISTS[p][0], "top_blocks": LISTS[p][3], "bottom_blocks": LISTS[p][4]}
+                        for p in PERIODS if p != "cumulative"}
+    state["monthly"] = monthly_for(UNIV.block_id.tolist())
     meta["sources"] = source_dates()
     _upd = [pd.Timestamp(s_["updated"]) for s_ in meta["sources"] if s_["updated"]]
     meta["last_updated"] = max(_upd).strftime("%d %b %Y") if _upd else None
@@ -917,21 +1028,23 @@ def main():
     dump(OUT / "checks.json", {"flags": flags, "source_issues": source_issues(), "z": CHECK_Z})
     print(f"Data checks: {len(flags)} flags ({sum(f_['sev'] == 'error' for f_ in flags)} errors)")
     dump(OUT / "manifest.json", manifest)
-    dump(OUT / "scoring_summary.json", {"blocks": [{"id": r["block_id"], "name": r["name"], "district": r["district"],
-                                                   "slug": r["slug"], "comp": {c["key"]: r["comp_" + c["key"]] for c in COMPONENTS}} for r in all_blocks],
-                                        "districts": [{"id": r["district_geo_id"], "name": r["name"],
-                                                       "comp": {c["key"]: r["comp_" + c["key"]] for c in COMPONENTS}} for r in district_rows]})
+    dump(OUT / "scoring_summary.json", {"periods": {p: {
+        "blocks": [{"id": r["block_id"], "name": r["name"], "district": r["district"], "slug": r["slug"],
+                    "comp": {c["key"]: r["comp_" + c["key"]] for c in COMPONENTS}} for r in LISTS[p][2]],
+        "districts": [{"id": r["district_geo_id"], "name": r["name"],
+                       "comp": {c["key"]: r["comp_" + c["key"]] for c in COMPONENTS}} for r in LISTS[p][0]]} for p in PERIODS}})
     lab = {k: l for k, c, l, *_ in KPIS}
     def flat(r, keep):
         o = {kk: r.get(kk) for kk in keep}
-        o["Overall score"] = r["overall_score"]
+        o["SD Index"] = r["overall_score"]
         for c in COMPONENTS:
             o[c["label"] + " score"] = r["comp_" + c["key"]]
         for k, *_ in KPIS:
             o[lab[k]] = r[k]; o[lab[k] + " (score)"] = r[k + "__score"]
         return o
-    dump(OUT / "export_data.json", {"blocks": [flat(r, ["district", "name", "block_id", "overall_state_rank"]) for r in all_blocks],
-                                    "districts": [flat(r, ["name", "overall_state_rank"]) for r in district_rows]})
+    dump(OUT / "export_data.json", {"periods": {p: {
+        "blocks": [flat(r, ["district", "name", "block_id", "overall_state_rank"]) for r in LISTS[p][2]],
+        "districts": [flat(r, ["name", "overall_state_rank"]) for r in LISTS[p][0]]} for p in PERIODS}})
 
     # ---------------- offline bundle
     # Browsers block fetch() for pages opened straight from disk (file://),
