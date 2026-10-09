@@ -343,7 +343,9 @@ def compute_unit(ids):
     # ---------------- DAK
     has_dak = bool(ids & HAS_DAK_FINAL)
     c = sub(PER["cases"], ids)
-    dak = {"has_dak": has_dak, "n_daks": int(sub(dak_master, ids).DAK_Name.nunique()) if has_dak else 0}
+    # count DAKs from the master list (one row per DAK, one DAK per block) -
+    # DAK names repeat ("Didi Adhikar Kendra"), so counting names undercounts
+    dak = {"has_dak": has_dak, "n_daks": int(len(sub(dak_master, ids))) if has_dak else 0}
     for kind in ("ent", "gbv"):
         k = c[c.kind == kind]
         n, res = len(k), int(k.resolved.sum())
@@ -366,7 +368,13 @@ def compute_unit(ids):
                   "active_vles": int(a["CSC Id"].nunique()), "active_months": int(a.month.nunique()),
                   "n_services": int(a.loc[a["Total Txn"] > 0, "Service"].nunique()),
                   "months_available": len(PER["alt_months"]),
-                  "service_mix": mix(a.groupby("Service")["Total Txn"].sum(), top=6)}
+                  "service_mix": mix(a.groupby("Service")["Total Txn"].sum(), top=6),
+                  # DAKs (blocks with a DAK) with any CSC transaction in the period, out of all DAKs;
+                  # districts where at least one DAK has started CSC services
+                  "daks_active": int(len(set(a.loc[a["Total Txn"] > 0, "block_id"]) & set(dak_master.block_id))),
+                  "daks_total": int(len(sub(dak_master, ids))),
+                  "districts_active": int(UNIV[UNIV.block_id.isin(set(a.loc[a["Total Txn"] > 0, "block_id"]))].district_norm.nunique()),
+                  "districts_total": int(UNIV[UNIV.block_id.isin(ids)].district_norm.nunique())}
     # Scored KPI (agreed with Mohan, Oct 2026): number of distinct alternate
     # services the DAK offered in the last 12 months - simpler than counting
     # active months, and ranks blocks almost identically.

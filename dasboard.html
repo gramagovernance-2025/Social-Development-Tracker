@@ -979,7 +979,11 @@ const RENDER = {
     const a = d.alt;
     h += section('Alternate Services', `CSC services through the DAK &middot; last 12 months (${a.months_available} of 12 months have data)`,
       `<div class="grid2">${card(tiles([tile('Services offered', fmtNum(a.n_services), 'different types', sc(u,'dak_alt')), tile('Transactions', fmtNum(a.transactions)),
-        tile('Value', fmtRs(a.amount)), tile('Active months', `${a.active_months} / ${a.months_available}`, `${fmtNum(a.active_vles)} active VLE didi${a.active_vles===1?'':'s'}`)]))}
+        tile('Value', fmtRs(a.amount)), tile('Active months', `${a.active_months} / ${a.months_available}`, 'months with any transaction'),
+        SCOPE==='block'
+          ? tile('This DAK in CSC', a.daks_active ? 'Active' : 'Not active', `${fmtNum(a.active_vles)} active VLE didi${a.active_vles===1?'':'s'}`, a.daks_active?90:10)
+          : tile('DAKs active in CSC', `${fmtNum(a.daks_active)} / ${fmtNum(a.daks_total)}`, `${fmtNum(a.active_vles)} active VLE didi${a.active_vles===1?'':'s'} &middot; ${fmtPct(a.daks_total?a.daks_active/a.daks_total*100:null,0)} of DAKs`, a.daks_total?a.daks_active/a.daks_total*100:null),
+        ...(SCOPE==='state' ? [tile('Districts started', `${fmtNum(a.districts_active)} / ${fmtNum(a.districts_total)}`, 'districts where at least one DAK offers CSC services', a.districts_total?a.districts_active/a.districts_total*100:null)] : [])]))}
        ${card(vbars(a.service_mix, {empty:'No alternate-service transactions on record.'}), 'Services provided')}</div>`, true);
     return h;
   },
