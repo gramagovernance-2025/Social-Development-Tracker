@@ -53,7 +53,7 @@ The **Discrepancy Report** tab lists entries that look wrong, at block and distr
 
 - **Default weights** (agreed Oct 2026): DAK 30, VRF 10, VPRP 20, Nursery 5, Plantation 5, Disability 10, Second Chance 20. Until Second Chance has data, its share is spread across the others in proportion to their weights. Viewers can change the weights on the page for their own session.
 
-- **"vs target" KPIs** score as % of target, capped at 100: nursery target, VPRP coverage, social issues filed, disability SHG target. Alternate services is scored as a percentile on the number of different services offered in the last 12 months.
+- **"vs target" KPIs** score as % of target, capped at 100: nursery target, VPRP coverage, social issues filed, disability SHG target. Alternate services is scored as a percentile on the number of different services offered in the selected period.
 - **"percentile" KPIs** score as a state percentile: blocks are compared with blocks, districts with districts. Ties share the lowest rank in the tie, so hundreds of blocks with zero nursery sales don't all get a high score.
 - **DAK case scores** follow the DAK tracker's method: the average of the percentiles of resolution rate, median days to resolve and average age of pending cases.
 - **Component score** is the mean of the component's KPI scores. **Overall score** is the mean of the components a unit has. Missing components (no DAK, no VRF data) are left out, not counted as 0. Viewers can re-weight the components on the page.
