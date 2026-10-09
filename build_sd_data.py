@@ -249,6 +249,19 @@ _repeat = pd.Series(False, index=nm.index)
 _pos = nm.loc[_order]
 _repeat.loc[_order] = (_pos.sale_val > 0) & _pos.duplicated(subset=["district", "block", "sale_val"], keep="first")
 _bad = _bad | _repeat | ((nm.sale_val > 0) & (nm.sold_m > 0) & (nm.sale_val / nm.sold_m.where(nm.sold_m > 0) > NUR_PRICE_CAP))
+_r_noplants = (nm.sale_val > 0) & (nm.sold_m == 0) & (nm.recv < 0.01 * nm.sale_val)
+_r_price = (nm.sale_val > 0) & (nm.sold_m > 0) & (nm.sale_val / nm.sold_m.where(nm.sold_m > 0) > NUR_PRICE_CAP)
+NUR_FLAG_ROWS = nm[_bad].assign(reason=np.select(
+    [_r_noplants[_bad], _repeat[_bad], _r_price[_bad]],
+    ["Sale value with no plants sold and almost nothing paid",
+     "Same sale value as an earlier month (running total carried forward)",
+     f"More than Rs {NUR_PRICE_CAP:,} per plant"], "Implausible money entry"))[
+    ["district", "block", "block_id", "period", "sold_m", "sale_val", "recv", "reason"]].copy()
+# sold more plants in a month than the nursery had in stock the month before
+_nm_sorted = nm.sort_values("date")
+_prev = _nm_sorted.groupby("block_id").total.shift(1)
+NUR_OVERSOLD = _nm_sorted[(_prev > 0) & (_nm_sorted.sold_m > _prev)].assign(prev_stock=_prev)[
+    ["district", "block", "block_id", "period", "sold_m", "prev_stock"]].copy()
 NUR_EXCLUDED = int(_bad.sum()); NUR_EXCLUDED_VALUE = float(nm.loc[_bad, "sale_val"].sum())
 nm.loc[_bad, ["sale_val", "recv", "due"]] = 0   # drop the whole money entry, not just part of it
 nmf = nm[(nm.ym >= NUR_FY[0]) & (nm.ym <= NUR_FY[1])]
@@ -659,6 +672,129 @@ def slugify(s):
     return re.sub(r"(^-|-$)", "", re.sub(r"[^a-z0-9]+", "-", str(s).lower()))
 
 # ============================================================================ build
+# ============================================================================ data checks
+# Two kinds of flag:
+#   "error": a value that cannot be right (more plants alive than given, a
+#            case resolved before it was filed, ...). Flagged wherever it occurs.
+#   "check": a value far from what other places report. Measured with a robust
+#            z-score (distance from the median in units of the median absolute
+#            deviation), both ends, |z| > 3.5. Unlike a fixed "top/bottom 1%",
+#            this flags nothing when the data is clean and everything when it
+#            is not, and the outliers themselves don't distort it.
+CHECK_Z = 3.5
+SKEWED_UNITS = {"num", "per100", "per1000", "x"}
+# Only metrics where an extreme value suggests a recording problem. Bounded
+# performance rates (VO linkage, bank accounts, plan coverage, ...) are left
+# out: a block at 100% there is doing well, not entering data wrongly.
+STAT_KPIS = ["dak_reach", "vrf_disc", "vrf_mult", "vrf_yield", "nur_sales", "pl_surv", "pl_reach"]
+
+def build_checks(units, level):
+    """units: dict id -> computed unit (blocks or districts). Returns flags."""
+    flags = []
+    def add(uid, comp, rule, sev, detail, value=None):
+        u = units[uid]
+        flags.append({"level": level, "id": uid, "district": u["district"] if level == "block" else u["name"],
+                      "block": u["name"] if level == "block" else None, "c": comp, "rule": rule, "sev": sev,
+                      "detail": detail, "value": value})
+    ids = list(units)
+    # ---- statistical checks on metric values
+    for k in STAT_KPIS:
+        meta = next(m for m in KPI_META if m["key"] == k)
+        v = pd.Series({i: units[i]["kpi"][k]["value"] for i in ids}, dtype=float).dropna()
+        if len(v) < 10:
+            continue
+        t = np.log1p(v.clip(lower=0)) if meta["unit"] in SKEWED_UNITS else v
+        med = t.median(); mad = (t - med).abs().median() * 1.4826
+        if not mad or np.isnan(mad):
+            continue
+        z = (t - med) / mad
+        lo, hi = v.quantile(0.1), v.quantile(0.9)
+        fmt = (lambda a: f"{a:.1f}%") if meta["unit"] == "pct" else (lambda a: f"{a:,.1f}")
+        for i in z[z.abs() > CHECK_Z].index:
+            add(i, meta["component"], f"Unusually {'high' if z[i] > 0 else 'low'}: {meta['label']}", "check",
+                f"{meta['label']} is {fmt(v[i])}; most {level}s are between {fmt(lo)} and {fmt(hi)}", round(float(v[i]), 2))
+    return flags
+
+def block_rule_flags(blocks):
+    flags = []
+    def add(bid, comp, rule, sev, detail, value=None):
+        u = blocks[bid]
+        flags.append({"level": "block", "id": bid, "district": u["district"], "block": u["name"], "c": comp,
+                      "rule": rule, "sev": sev, "detail": detail, "value": value})
+    # DAK: resolved before filed; resolved cases with no resolution details
+    neg = cases[(cases.res_date - cases.app).dt.days < 0].groupby("block_id").size()
+    for bid, n in neg.items():
+        add(bid, "dak", "Case resolved before it was filed", "error", f"{n} resolved case{'s' if n > 1 else ''} with a resolution date earlier than the application date", int(n))
+    nodet = cases[cases.resolved & cases.res_date.isna()].groupby("block_id").size()
+    for bid, n in nodet.items():
+        add(bid, "dak", "Resolved case with no resolution details", "check", f"{n} resolved case{'s' if n > 1 else ''} with no resolution date or outcome on the portal", int(n))
+    for bid in blocks:
+        if bid in HAS_DAK and not (cases.block_id == bid).any():
+            add(bid, "dak", "DAK with no cases", "check", "The block has a DAK but no cases are recorded")
+    # VRF: corpus below what was received; savings far above the expected amount
+    g = vrf.assign(low=(vrf.totalvrfreceived > 0) & (vrf.totalvrfcorpus < vrf.totalvrfreceived),
+                   high=vrf.savings_discipline_rate > 300).groupby("block_id")[["low", "high"]].sum()
+    for bid, r in g.iterrows():
+        if r.low:
+            add(bid, "vrf", "VRF corpus smaller than VRF received", "error", f"{int(r.low)} VO{'s' if r.low > 1 else ''} report a corpus below the grant received (savings and interest should only add to it)", int(r.low))
+        if r.high:
+            add(bid, "vrf", "Savings more than 3 times the expected amount", "check", f"{int(r.high)} VO{'s' if r.high > 1 else ''} report VRF savings over 300% of what full monthly saving would give", int(r.high))
+    # VPRP: more VOs filed than there are active VOs
+    for bid, u in blocks.items():
+        v = u["vprp"]; cur = next((b for b in v["by_year"] if b["year"] == v["year"]), None)
+        if cur and v["active_vos"] and cur["any"] > v["active_vos"]:
+            add(bid, "vprp", "More VOs filed than active VOs", "check", f"{cur['any']} VOs filed a plan in {v['year']} but LokOS lists {v['active_vos']} active VOs (VO names may not match)", cur["any"])
+    # Nursery: implausible money entries and overselling
+    for _, r in NUR_FLAG_ROWS.iterrows():
+        add(r.block_id, "nursery", r.reason, "error", f"{r.period}: {int(r.sold_m):,} plants, value Rs {int(r.sale_val):,}, received Rs {int(r.recv):,}. Left out of the money figures.", int(r.sale_val))
+    for _, r in NUR_OVERSOLD.iterrows():
+        add(r.block_id, "nursery", "Sold more plants than were in stock", "check", f"{r.period}: {int(r.sold_m):,} plants sold, but only {int(r.prev_stock):,} in stock the month before", int(r.sold_m))
+    # Plantation: more alive than given; species not adding up to the total
+    for y in PLY:
+        lv = PL_LIVE[y].groupby("block_id").live.sum(); dt = PL_DIST[y].groupby("block_id").Total.sum()
+        both = pd.concat([lv, dt], axis=1).dropna()
+        for bid, r in both[both.live > both.Total].iterrows():
+            add(bid, "plantation", "More plants alive than were given", "error", f"{y}: {int(r.live):,} alive but {int(r.Total):,} given", int(r.live))
+        sp = PL_DIST[y].groupby("block_id")[SPECIES].sum().sum(axis=1)
+        diff = pd.concat([sp.rename("sp"), dt.rename("tot")], axis=1).dropna()
+        for bid, r in diff[(diff.sp - diff.tot).abs() > 0.01 * diff.tot.clip(lower=1)].iterrows():
+            add(bid, "plantation", "Species don't add up to the total", "check", f"{y}: species add up to {int(r.sp):,} but the total says {int(r.tot):,}", int(r.tot))
+    # Disability: disability SHGs but no members with a disability
+    for bid, u in blocks.items():
+        d = u["disability"]
+        if d["pwd"]["n"] > 0 and not d["dis_self"]:
+            add(bid, "disability", "Disability SHGs but no disabled members recorded", "check", f"{d['pwd']['n']} disability SHGs, but no member in the block is recorded as having a disability", d["pwd"]["n"])
+    return flags
+
+def source_issues():
+    return [
+        {"c": "vprp", "sev": "check", "issue": f"{VPRP_LATEST} entitlement export looks incomplete",
+         "detail": f"About a quarter as many requests per VO as 2023, and social category is missing for almost all {VPRP_LATEST} requesters. SC/ST reach uses {SCST_YEAR} instead."},
+        {"c": "nursery", "sev": "check", "issue": "Nursery-wise report is missing nurseries",
+         "detail": "It lists 636 of the 893 nurseries in the monthly report, and its 'dried plants' columns are empty everywhere."},
+        {"c": "nursery", "sev": "check", "issue": "Payments are only recorded in the month of sale",
+         "detail": "Sale value always equals received + due for that month, so payments that arrive later never appear."},
+        {"c": "dak", "sev": "check", "issue": f"Alternate services cover {len(ALT_AVAIL)} of the last 12 months",
+         "detail": "Some monthly CSC exports were never scraped, and only 37 blocks have any activity."},
+        {"c": "disability", "sev": "check", "issue": "Disability type defaults to 'Sight'",
+         "detail": "LokOS records 'Sight' as the disability type for most members who have no disability, so type is only used for members flagged as disabled."},
+    ]
+
+def source_dates():
+    def newest(paths):
+        ts = [os.path.getmtime(f) for f in paths if os.path.exists(f)]
+        return pd.Timestamp.fromtimestamp(max(ts)).strftime("%d %b %Y") if ts else None
+    CLEAN = BASE / "2_Data" / "Cleaned"
+    return [
+        {"c": "dak", "source": "DAK cases (DAK MIS)", "updated": newest(glob.glob(str(DAK_SRC / "*case_master_list.csv"))), "covers": f"Cases up to {DATA_DATE:%d %b %Y}"},
+        {"c": "dak", "source": "DAK alternate services (CSC)", "updated": newest(glob.glob(str(RAW / "DAK Specta" / "*.csv"))), "covers": f"Up to {ALT_END.strftime('%b %Y')}"},
+        {"c": "vrf", "source": "VRF", "updated": newest([str(VRF_FILE)]), "covers": "Current position of each VO"},
+        {"c": "vprp", "source": "VPRP (LokOS)", "updated": newest(glob.glob(str(CLEAN / "clf_*.dta"))), "covers": f"Plan years {min(VPRP_YEARS)}–{VPRP_LATEST}"},
+        {"c": "nursery", "source": "Didi ki Nursery", "updated": newest(glob.glob(str(RAW / "Didi Ki Nursery" / "*.csv"))), "covers": f"Up to {pd.Period(NUR_LATEST).strftime('%b %Y')}"},
+        {"c": "plantation", "source": "VanMitra plantation", "updated": newest(glob.glob(str(RAW / "VanMitra Plantation" / "*" / "*.xlsx"))), "covers": "2024-25 and 2025-26"},
+        {"c": "disability", "source": "LokOS SHG and member profiles", "updated": newest(glob.glob(str(BASE / "2_Data" / "Raw Files" / "Member-Level Profile" / "*.csv")) + [str(CLEAN / "lokos_shg_profiles.dta")]), "covers": "Current SHGs and members"},
+    ]
+
 def main():
     print("Computing blocks")
     blocks = {}
@@ -766,8 +902,20 @@ def main():
     scored = [r for r in all_blocks if r["overall_score"] is not None]
     state["top_blocks"] = sorted(scored, key=lambda r: -r["overall_score"])[:10]
     state["bottom_blocks"] = sorted(scored, key=lambda r: r["overall_score"])[:10]
+    meta["sources"] = source_dates()
+    _upd = [pd.Timestamp(s_["updated"]) for s_ in meta["sources"] if s_["updated"]]
+    meta["last_updated"] = max(_upd).strftime("%d %b %Y") if _upd else None
     state["meta"] = meta
     dump(OUT / "state.json", state)
+    flags = block_rule_flags(blocks) + build_checks(blocks, "block") + build_checks(districts, "district")
+    for f_ in flags:
+        if f_["level"] == "block":
+            f_["slug"] = slugify(f"{blocks[f_['id']]['district']}-{blocks[f_['id']]['name']}-{f_['id']}")
+            f_["dslug"] = slugify(UNIV.set_index("block_id").district_norm[f_["id"]])
+        else:
+            f_["dslug"] = slugify(f_["id"])
+    dump(OUT / "checks.json", {"flags": flags, "source_issues": source_issues(), "z": CHECK_Z})
+    print(f"Data checks: {len(flags)} flags ({sum(f_['sev'] == 'error' for f_ in flags)} errors)")
     dump(OUT / "manifest.json", manifest)
     dump(OUT / "scoring_summary.json", {"blocks": [{"id": r["block_id"], "name": r["name"], "district": r["district"],
                                                    "slug": r["slug"], "comp": {c["key"]: r["comp_" + c["key"]] for c in COMPONENTS}} for r in all_blocks],

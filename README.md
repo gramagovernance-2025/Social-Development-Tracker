@@ -32,6 +32,14 @@ Then open http://localhost:8765/dasboard.html. Double-clicking `dasboard.html` a
 
 Tabs: Overview, one tab per component (Gender (DAK), VRF, VPRP, Nursery, Plantation, Disability SHGs, Second Chance), then **SD Index**. Each component tab opens with that component's score and the score of each metric behind it, followed by the detail and a map and ranking. The SD Index tab combines the components. Click any component there to see its metrics.
 
+## Data Checks tab and "last updated"
+
+The header shows when the newest source was last scraped, with a per-source list (taken from file dates when the build runs).
+
+The **Data Checks** tab lists entries that look wrong, at block and district level, for follow-up with field teams (`data/checks.json`):
+- **Error**: a value that cannot be right. Examples: more plants alive than given, a case resolved before it was filed, a nursery sale with no plants, the same sale value re-entered, over Rs 5,000 per plant, a VRF corpus below the grant received.
+- **Check**: a value far from other places, high or low. Measured as a robust z-score above 3.5 (distance from the median in median-absolute-deviation units). It is used only for metrics where an extreme value suggests a recording problem: case reach, VRF savings discipline, corpus multiplier and interest yield, plants sold per nursery, plantation survival and reach. Also flagged here: DAKs with no cases, resolved cases with no details, VRF savings over 3 times the expected amount, sales larger than the previous month's stock, species not adding up to the total, more VOs filing than are active, and disability SHGs where no member is recorded as disabled.
+
 ## Scoring
 
 - **Default weights** (agreed Oct 2026): DAK 30, VRF 10, VPRP 20, Nursery 5, Plantation 5, Disability 10, Second Chance 20. Until Second Chance has data, its share is spread across the others in proportion to their weights. Viewers can change the weights on the page for their own session.

@@ -99,6 +99,26 @@ section{ margin-top:40px; }
 .perf tr.me td{ background:var(--primary-soft); }
 .perf .g{ color:#1f7a59; } .perf .y{ color:#9a6f1f; } .perf .r{ color:#a54632; }
 .perf tbody tr:hover td{ background:var(--panel-alt); }
+/* last-updated strip */
+.updated{ margin-top:10px; font-size:12.5px; color:var(--ink-soft); }
+.updated summary{ cursor:pointer; list-style:none; display:inline-flex; gap:8px; align-items:center; }
+.updated summary::-webkit-details-marker{ display:none; }
+.updated summary b{ color:var(--ink); }
+.updated summary .lnk{ color:var(--primary); font-weight:600; }
+.updated .src{ margin-top:10px; background:var(--panel); border:1px solid var(--line-strong); border-radius:10px; padding:10px 14px; max-width:720px; }
+.updated .src table td{ padding:6px 8px; font-size:12.5px; }
+/* data checks */
+.sev{ display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; white-space:nowrap; }
+.sev.error{ background:var(--low-soft); color:#a54632; } .sev.check{ background:var(--gold-soft); color:#8a6420; }
+.chk-filters{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
+.chk-filters select, .chk-filters input{ font-family:inherit; font-size:13px; padding:8px 10px; border-radius:8px; border:1px solid var(--line-strong); background:#fff; }
+.chk-table td{ vertical-align:top; white-space:normal; }
+.chk-table th.num, .chk-table td.num{ text-align:right; font-variant-numeric:tabular-nums; }
+.chk-table td.nm a{ color:var(--primary); font-weight:600; cursor:pointer; }
+.chk-table td.det{ color:var(--ink-soft); font-size:12.5px; max-width:460px; }
+.issue{ display:grid; grid-template-columns:auto 1fr; gap:4px 12px; padding:10px 0; border-top:1px solid var(--line); }
+.issue:first-child{ border-top:none; padding-top:0; }
+.issue .it{ font-weight:600; font-size:13.5px; } .issue .id{ grid-column:2; font-size:12.5px; color:var(--ink-soft); }
 /* export menu */
 .export-wrap{ position:relative; }
 .export-menu{ position:absolute; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--line-strong); border-radius:10px; box-shadow:0 8px 24px rgba(30,35,32,.12); padding:6px; z-index:50; min-width:220px; }
@@ -246,6 +266,7 @@ tbody tr:last-child td{ border-bottom:none; }
       <div>
         <h1 class="serif">Social Development Tracker</h1>
         <p class="hint">Gender (DAK) &middot; VRF &middot; VPRP &middot; Didi ki Nursery &middot; VanMitra Plantation &middot; Disability SHGs &middot; Second Chance</p>
+        <details class="updated" id="updated"></details>
       </div>
       <div class="export-wrap"><button id="btn-export-excel" class="weight-btn" style="white-space:nowrap;" aria-haspopup="true" aria-expanded="false">&#128190; Export to Excel &#9662;</button>
         <div class="export-menu" id="export-menu" hidden><button data-x="view" id="export-view">This view</button><button data-x="all">All of Bihar<small>every block and district</small></button></div></div>
@@ -336,7 +357,14 @@ async function init(){
   SCORED_COMPS = COMPS.filter(c=> META.kpis.some(k=>k.component===c.key));
   COMPS.forEach(c=>{ DEFAULT_W[c.key] = c.weight!=null ? c.weight : 1; TABS.push({key:c.key, label:c.label}); });
   TABS.push({key:'score', label:'SD Index'});
+  TABS.push({key:'checks', label:'Data Checks'});
   W = {...DEFAULT_W};
+  // "last updated" strip: newest scrape across sources, with a per-source list
+  if(META.sources){
+    document.getElementById('updated').innerHTML = `<summary>Data last updated <b>${esc(META.last_updated||'—')}</b><span class="lnk">dates by source ▾</span></summary>
+      <div class="src"><table><thead><tr><th>Source</th><th>Last scraped</th><th>Covers</th></tr></thead><tbody>${
+        META.sources.map(s=>`<tr><td><b>${esc(s.source)}</b></td><td>${esc(s.updated||'—')}</td><td>${esc(s.covers||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  }
   try{ const t = localStorage.getItem('sd-tab'); if(t && TABS.some(x=>x.key===t)) TAB=t; }catch(e){}
   if(location.hash && TABS.some(x=>x.key===location.hash.slice(1))) TAB = location.hash.slice(1);
   document.getElementById('tabbar').innerHTML = TABS.map(t=>`<button class="tabbtn" data-tab="${t.key}">${t.label}</button>`).join('');
@@ -398,6 +426,7 @@ function refreshView(){
   window.__lists = {};
   AFTER = [];
   const unit = currentUnit();
+  if(TAB==='checks'){ renderChecks(); return; }
   document.getElementById('app').innerHTML = TAB==='overview' ? overviewHtml(unit) : TAB==='score' ? scorecardHtml(unit) : componentHtml(TAB, unit);
   AFTER.forEach(fn=>fn());
   document.querySelectorAll('.btn-open-weights').forEach(b=> b.addEventListener('click', openWeightModal));
@@ -993,6 +1022,80 @@ const RENDER = {
       tile('Under 35', fmtNum(s.tp35)), tile('Under 30', fmtNum(s.tp30)), tile('Under 25', fmtNum(s.tp25)), tile('SC/ST, under 35', fmtNum(s.tp35_scst)), tile('OBC, under 35', fmtNum(s.tp35_obc))]));
   },
 };
+
+// ============================================================================
+// DATA CHECKS tab: entries that look wrong, for follow-up with block teams.
+// Built by build_sd_data.py (checks.json): "error" = cannot be right;
+// "check" = far from what other places report (robust z-score > 3.5).
+// ============================================================================
+let CHECKS = null;
+async function renderChecks(){
+  const app = document.getElementById('app');
+  app.innerHTML = '<p class="disclaimer">Loading checks…</p>';
+  if(!CHECKS) CHECKS = await fetchJson('data/checks.json');
+  if(TAB!=='checks') return;
+  const compLabel = k=> (COMPS.find(c=>c.key===k)||{label:k}).label;
+  // flags in the current scope
+  let flags = CHECKS.flags;
+  if(SCOPE==='district') flags = flags.filter(f=> f.dslug===document.getElementById('sel-district').value);
+  if(SCOPE==='block') flags = flags.filter(f=> f.level==='block' && f.id===BLOCK_DATA.block_id);
+  const nErr = flags.filter(f=>f.sev==='error').length, nChk = flags.length - nErr;
+  const places = new Set(flags.filter(f=>f.level==='block').map(f=>f.id)).size;
+  let h = `<div class="page-title"><h2 class="serif">Data Checks &mdash; ${esc(scopeName())}</h2><span class="hint">entries that look wrong, to follow up with the block or district team</span></div>`;
+  h += section('How Entries Are Flagged', '', `<div class="grid2">
+    <div><span class="sev error">Error</span><p class="disclaimer" style="margin-top:8px;">A value that cannot be right: more plants alive than were given, a case resolved before it was filed, a sale with no plants, a VRF corpus smaller than the grant received. Flagged wherever it occurs.</p></div>
+    <div><span class="sev check">Check</span><p class="disclaimer" style="margin-top:8px;">A value far from what other places report, high or low. "Far" means more than ${CHECKS.z} typical deviations from the median (a robust z-score), so a few extreme entries can't hide each other, and nothing is flagged when the data is clean. Only used for metrics where an extreme value suggests a recording problem, not good performance.</p></div></div>`);
+  h += section('Summary', '', tiles([
+    tile('Errors', fmtNum(nErr), 'values that cannot be right', nErr?10:90),
+    tile('Checks', fmtNum(nChk), 'unusual values to confirm', nChk?50:90),
+    tile('Blocks flagged', fmtNum(places), SCOPE==='block'?'this block':'with at least one flag'),
+    tile('Most flags', (()=>{ const c={}; flags.forEach(f=>c[f.c]=(c[f.c]||0)+1); const top=Object.entries(c).sort((a,b)=>b[1]-a[1])[0]; return top?esc(compLabel(top[0])):'—'; })(), 'component'),
+  ]));
+  if(SCOPE==='state'){
+    h += section('Source-Wide Issues', 'problems with a whole data source, not one place', CHECKS.source_issues.map(s=>`<div class="issue"><span class="sev ${s.sev}">${compLabel(s.c)}</span><span class="it">${esc(s.issue)}</span><span class="id">${esc(s.detail)}</span></div>`).join(''));
+    const byD = {};
+    flags.forEach(f=>{ const d = byD[f.dslug] = byD[f.dslug] || {name:f.district, slug:f.dslug, error:0, check:0, comp:{}}; d[f.sev]++; d.comp[f.c]=(d.comp[f.c]||0)+1; });
+    const drows = Object.values(byD).sort((a,b)=> (b.error-a.error) || (b.check-a.check));
+    h += section('Flags by District', 'click a district to see its flags', `<div class="table-wrap"><table class="chk-table"><thead><tr><th>District</th><th class="num">Errors</th><th class="num">Checks</th>${SCORED_COMPS.map(c=>`<th class="num">${c.label}</th>`).join('')}</tr></thead><tbody>${
+      drows.map(d=>`<tr><td class="nm"><a data-d="${d.slug}">${esc(d.name)}</a></td><td class="num"><b style="color:${d.error?'#a54632':'inherit'}">${d.error}</b></td><td class="num">${d.check}</td>${SCORED_COMPS.map(c=>`<td class="num">${d.comp[c.key]||''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+  }
+  // flag list with filters
+  const comps = [...new Set(flags.map(f=>f.c))];
+  h += section('All Flags', `${flags.length} in ${esc(scopeName())}`, `
+    <div class="chk-filters">
+      <select id="chk-type" aria-label="Type"><option value="">Errors and checks</option><option value="error">Errors only</option><option value="check">Checks only</option></select>
+      <select id="chk-comp" aria-label="Component"><option value="">All components</option>${comps.map(c=>`<option value="${c}">${compLabel(c)}</option>`).join('')}</select>
+      <input id="chk-q" type="search" placeholder="Search place or check…" aria-label="Search flags">
+      <button class="weight-btn" id="chk-dl">&#128190; Download these flags</button>
+    </div><div class="table-wrap"><table class="chk-table" id="chk-tbl"></table></div>
+    ${flags.length? '' : '<p class="disclaimer">No flags here.</p>'}`);
+  app.innerHTML = h + footer();
+  app.querySelectorAll('a[data-d]').forEach(a=> a.addEventListener('click', ()=> navToDistrict(a.dataset.d)));
+  const draw = ()=>{
+    const t = document.getElementById('chk-type').value, c = document.getElementById('chk-comp').value, q = document.getElementById('chk-q').value.trim().toLowerCase();
+    const rows = flags.filter(f=> (!t||f.sev===t) && (!c||f.c===c) && (!q || [f.district,f.block,f.rule,f.detail].join(' ').toLowerCase().includes(q)))
+      .sort((a,b)=> (a.sev===b.sev?0:a.sev==='error'?-1:1) || String(a.district).localeCompare(String(b.district)) || String(a.block||'').localeCompare(String(b.block||'')));
+    window.__chkRows = rows;
+    document.getElementById('chk-tbl').innerHTML = `<thead><tr><th>Type</th><th>District</th><th>Block</th><th>Component</th><th>What looks wrong</th><th>Detail</th></tr></thead><tbody>${
+      rows.slice(0,600).map(f=>`<tr><td><span class="sev ${f.sev}">${f.sev==='error'?'Error':'Check'}</span></td>
+        <td class="nm"><a data-d="${f.dslug}">${esc(f.district)}</a></td><td class="nm">${f.block?`<a data-b="${f.slug}">${esc(f.block)}</a>`:'<span class="hint">whole district</span>'}</td>
+        <td>${esc(compLabel(f.c))}</td><td><b>${esc(f.rule)}</b></td><td class="det">${esc(f.detail)}</td></tr>`).join('')}</tbody>`
+      + (rows.length>600?`<caption class="hint" style="caption-side:bottom;padding-top:8px;">Showing 600 of ${rows.length}. Narrow the filters or download to see all.</caption>`:'');
+    document.querySelectorAll('#chk-tbl a[data-d]').forEach(a=> a.addEventListener('click', ()=> navToDistrict(a.dataset.d)));
+    document.querySelectorAll('#chk-tbl a[data-b]').forEach(a=> a.addEventListener('click', ()=> navToBlock(a.dataset.b)));
+  };
+  ['chk-type','chk-comp'].forEach(id=> document.getElementById(id).addEventListener('change', draw));
+  document.getElementById('chk-q').addEventListener('input', draw);
+  document.getElementById('chk-dl').addEventListener('click', ()=>{
+    const rows = (window.__chkRows||[]).map(f=>({Type:f.sev==='error'?'Error':'Check', District:f.district, Block:f.block||'(whole district)', Component:compLabel(f.c), 'What looks wrong':f.rule, Detail:f.detail, Value:f.value}));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Flags');
+    if(SCOPE==='state') XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(CHECKS.source_issues.map(s=>({Component:compLabel(s.c), Issue:s.issue, Detail:s.detail}))), 'Source-wide issues');
+    XLSX.writeFile(wb, `SD_Data_Checks_${scopeName().replace(/[^A-Za-z0-9]+/g,'_')}.xlsx`);
+  });
+  draw();
+  document.querySelectorAll('.btn-open-weights').forEach(b=> b.addEventListener('click', openWeightModal));
+}
 
 // ============================================================================
 // Excel export
