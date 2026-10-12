@@ -957,6 +957,16 @@ def dist(vals):
     return {"median": round(float(s_.median()), 1), "n": int(len(s_)), "green": int((s_ >= 66).sum()),
             "yellow": int(((s_ >= 33) & (s_ < 66)).sum()), "red": int((s_ < 33).sum())}
 
+def state_comp_scores(state, comps=None):
+    """Average of the state's metric scores within each component."""
+    out = {}
+    for c in COMPONENTS:
+        if comps is not None and c["key"] not in comps:
+            continue
+        vals = [state["kpi"][k]["score"] for k, cc, *_ in KPIS if cc == c["key"] and k in state["kpi"] and state["kpi"][k]["score"] is not None]
+        out[c["key"]] = round(float(np.mean(vals)), 1) if vals else None
+    return out
+
 def run_period(p):
     """Compute and score every block, district and the state for one period."""
     global PER
@@ -998,14 +1008,18 @@ def run_period(p):
         state["dist"][k] = dd
         score = (min(100.0, round(float(val), 1)) if val is not None else None) if t == "target" else (dd["median"] if dd else None)
         state["kpi"][k] = {"value": None if val is None else float(val), "score": score}
-    state["comp_scores"] = {}
+    # The state's component scores are built the same way as a district's or
+    # block's: the average of the metric scores shown under it (target metrics
+    # on Bihar's own value, percentile metrics on the median block), and the
+    # SD Index is the weighted average of those. The colour-band counts of
+    # blocks are kept for display.
+    state["comp_scores"] = state_comp_scores(state)
     for c in COMPONENTS:
-        dd = dist([blocks[i]["comp_scores"][c["key"]] for i in blocks])
-        state["dist"]["comp_" + c["key"]] = dd
-        state["comp_scores"][c["key"]] = dd["median"] if dd else None
-    dd = dist([blocks[i]["overall_score"] for i in blocks])
-    state["dist"]["overall"] = dd
-    state["overall_score"] = dd["median"] if dd else None
+        state["dist"]["comp_" + c["key"]] = dist([blocks[i]["comp_scores"][c["key"]] for i in blocks])
+    state["dist"]["overall"] = dist([blocks[i]["overall_score"] for i in blocks])
+    present = [c for c in COMPONENTS if state["comp_scores"].get(c["key"]) is not None]
+    tw = sum(c["weight"] for c in present)
+    state["overall_score"] = round(sum(state["comp_scores"][c["key"]] * c["weight"] for c in present) / tw, 1) if tw else None
     return blocks, districts, state
 
 MONTH_COMPS = ["dak", "nursery"]
@@ -1053,8 +1067,8 @@ def run_month(ym):
         state["kpi"][k] = {"value": None if val is None else float(val),
                            "score": (min(100.0, round(float(val), 1)) if val is not None else None) if t == "target" else (dd["median"] if dd else None)}
     for c in MONTH_COMPS:
-        dd = dist([blocks[i]["comp_scores"][c] for i in blocks]); state["dist"]["comp_" + c] = dd
-        state["comp_scores"][c] = dd["median"] if dd else None
+        state["dist"]["comp_" + c] = dist([blocks[i]["comp_scores"][c] for i in blocks])
+    state["comp_scores"] = state_comp_scores(state, MONTH_COMPS)
     return blocks, districts, state
 
 # parts of a unit that change between periods; everything else is stored once
