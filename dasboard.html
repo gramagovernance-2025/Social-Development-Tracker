@@ -35,11 +35,9 @@ h1{ font-size:clamp(24px,4vw,32px); margin:0 0 6px; font-weight:600; }
 .tabbtn{ appearance:none; border:none; background:none; padding:11px 14px; font-family:inherit; font-size:14px; font-weight:600; color:var(--ink-soft); border-bottom:3px solid transparent; margin-bottom:-1px; cursor:pointer; }
 .tabbtn:hover{ color:var(--ink); }
 .tabbtn.active{ color:var(--primary); border-bottom-color:var(--primary); }
-/* Discrepancy Report: same tab style as the others, in red with an error count */
-.tabbtn.tab-alert{ color:#a54632; display:inline-flex; align-items:center; gap:6px; }
-.tabbtn.tab-alert:hover{ color:#8a3a29; }
-.tabbtn.tab-alert.active{ color:#a54632; border-bottom-color:var(--low); }
-.tabbtn.tab-alert .tab-count{ font-size:11px; font-weight:700; background:var(--low); color:#fff; border-radius:999px; padding:1px 7px; line-height:1.5; }
+/* Discrepancy Report: same tab style, bold, with a small amber count of entries to review */
+.tabbtn.tab-alert{ color:var(--ink); font-weight:700; display:inline-flex; align-items:center; gap:6px; }
+.tabbtn.tab-alert .tab-count{ font-size:11px; font-weight:700; background:var(--gold-soft); color:#8a6420; border:1px solid #e6c98c; border-radius:999px; padding:0 7px; line-height:1.6; }
 button:focus-visible, select:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
 
 section{ margin-top:40px; }
@@ -480,7 +478,7 @@ async function init(){
   try{ const t = localStorage.getItem('sd-tab'); if(t && TABS.some(x=>x.key===t)) TAB=t; }catch(e){}
   if(location.hash && TABS.some(x=>x.key===location.hash.slice(1))) TAB = location.hash.slice(1);
   document.getElementById('tabbar').innerHTML = TABS.map(t=> t.key==='checks'
-    ? `<button class="tabbtn tab-alert" data-tab="checks" title="Recording errors and unusual values to follow up">&#9888;&#65039; ${t.label}<span class="tab-count" id="tab-count"></span></button>`
+    ? `<button class="tabbtn tab-alert" data-tab="checks" title="Recording errors and unusual values to follow up">${t.label}<span class="tab-count" id="tab-count"></span></button>`
     : `<button class="tabbtn" data-tab="${t.key}">${t.label}</button>`).join('');
   // number of recording errors on the Discrepancy Report tab
   fetchJson('data/checks.json').then(c=>{ CHECKS = c; const n = c.flags.filter(f=>f.sev==='error').length;
