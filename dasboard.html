@@ -35,6 +35,12 @@ h1{ font-size:clamp(24px,4vw,32px); margin:0 0 6px; font-weight:600; }
 .tabbtn{ appearance:none; border:none; background:none; padding:11px 14px; font-family:inherit; font-size:14px; font-weight:600; color:var(--ink-soft); border-bottom:3px solid transparent; margin-bottom:-1px; cursor:pointer; }
 .tabbtn:hover{ color:var(--ink); }
 .tabbtn.active{ color:var(--primary); border-bottom-color:var(--primary); }
+/* Discrepancy Report: highlighted and pinned to the right of the tab bar */
+.tabbtn.tab-alert{ margin-left:auto; color:#a54632; background:var(--low-soft); border:1px solid #e9b3a6; border-bottom:3px solid #e9b3a6; border-radius:10px 10px 0 0; display:inline-flex; align-items:center; gap:7px; }
+.tabbtn.tab-alert:hover{ color:#8a3a29; background:#f8ddd6; }
+.tabbtn.tab-alert.active{ color:#fff; background:var(--low); border-color:var(--low); }
+.tabbtn.tab-alert .tab-count{ font-size:11px; font-weight:700; background:var(--low); color:#fff; border-radius:999px; padding:1px 7px; }
+.tabbtn.tab-alert.active .tab-count{ background:#fff; color:var(--low); }
 button:focus-visible, select:focus-visible{ outline:2px solid var(--primary); outline-offset:2px; }
 
 section{ margin-top:40px; }
@@ -474,7 +480,12 @@ async function init(){
   }
   try{ const t = localStorage.getItem('sd-tab'); if(t && TABS.some(x=>x.key===t)) TAB=t; }catch(e){}
   if(location.hash && TABS.some(x=>x.key===location.hash.slice(1))) TAB = location.hash.slice(1);
-  document.getElementById('tabbar').innerHTML = TABS.map(t=>`<button class="tabbtn" data-tab="${t.key}">${t.label}</button>`).join('');
+  document.getElementById('tabbar').innerHTML = TABS.map(t=> t.key==='checks'
+    ? `<button class="tabbtn tab-alert" data-tab="checks" title="Recording errors and unusual values to follow up">&#9888;&#65039; ${t.label}<span class="tab-count" id="tab-count"></span></button>`
+    : `<button class="tabbtn" data-tab="${t.key}">${t.label}</button>`).join('');
+  // number of recording errors on the Discrepancy Report tab
+  fetchJson('data/checks.json').then(c=>{ CHECKS = c; const n = c.flags.filter(f=>f.sev==='error').length;
+    const el = document.getElementById('tab-count'); if(el){ el.textContent = n; el.title = n+' errors, '+(c.flags.length-n)+' checks'; } }).catch(()=>{});
   document.querySelectorAll('.tabbtn').forEach(b=> b.addEventListener('click', ()=> setTab(b.dataset.tab)));
   MANIFEST = await fetchJson('data/manifest.json');
   const dSel = document.getElementById('sel-district');
