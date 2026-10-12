@@ -51,7 +51,8 @@ The **Discrepancy Report** tab lists entries that look wrong, at block and distr
 
 ## Scoring
 
-- **Default weights:** equal for every component (agreed Oct 2026). Second Chance and Budget drop out until their data arrives, so each of the six components with data counts for 1/6. Viewers can change the weights on the page for their own session.
+- **Default weights:** equal for every component (agreed Oct 2026). Second Chance and Budget drop out until their data arrives, so each of the seven components with data counts for 1/7.
+- **Data Quality component:** recording errors (the "error" rows of the Discrepancy Report; checks are not penalised). Each source (DAK cases, VRF records, nursery money entries, plantation counts) scores the share of its entries with no error, and the component is their average. 100 = no errors. Viewers can change the weights on the page for their own session.
 
 - **"vs target" KPIs** score as % of target, capped at 100: nursery target, VPRP coverage, social issues filed, disability SHG target. Alternate services is scored as a percentile on the number of different services offered in the selected period.
 - **"percentile" KPIs** score as a state percentile: blocks are compared with blocks, districts with districts. Ties share the lowest rank in the tie, so hundreds of blocks with zero nursery sales don't all get a high score.

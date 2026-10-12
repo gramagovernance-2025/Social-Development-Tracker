@@ -573,6 +573,8 @@ def compute_unit(ids, only=None):
 
     out["active_members"] = toint(active_members)
     out["pl_season"] = PER["pl_cur"]
+    if only is None:
+        out["dataquality"] = {"errors": sum(int((out.get(k) or {}).get("dq_errors") or 0) for k in ("dak", "vrf", "nursery", "plantation"))}
     return out
 
 # ============================================================================ periods
@@ -663,6 +665,9 @@ COMPONENTS = [
     {"key": "disability", "label": "Disability SHGs", "weight": 1},
     {"key": "secondchance", "label": "Second Chance", "weight": 1},
     {"key": "budget", "label": "Budget", "weight": 1},
+    # Recording errors found in the data (the "error" rows of the Discrepancy
+    # Report; unusual-value "checks" are not penalised). 100 = no errors.
+    {"key": "dataquality", "label": "Data Quality", "weight": 1},
 ]
 # key, component, label, unit, scoring type, higher_is_better, getter, description
 KPIS = [
@@ -698,13 +703,13 @@ KPIS = [
      "Live plants ÷ plants distributed, 2025-26 (capped at 100%)"),
     ("pl_reach", "plantation", "Plantation reach", "per100", "pctl", True, lambda u: u["plantation"]["reach"],
      "Plants distributed per 100 active SHG members, 2025-26"),
-    ("dq_dak", "dak", "Data quality", "pct", "target", True, lambda u: u["dak"]["dq"],
+    ("dq_dak", "dataquality", "DAK cases", "pct", "target", True, lambda u: u["dak"]["dq"],
      "Share of cases with no recording error (resolved before it was filed). 100 = no errors. Errors are listed in the Discrepancy Report"),
-    ("dq_vrf", "vrf", "Data quality", "pct", "target", True, lambda u: u["vrf"] and u["vrf"]["dq"],
+    ("dq_vrf", "dataquality", "VRF records", "pct", "target", True, lambda u: u["vrf"] and u["vrf"]["dq"],
      "Share of VOs with no recording error (corpus smaller than the grant received). 100 = no errors"),
-    ("dq_nursery", "nursery", "Data quality", "pct", "target", True, lambda u: u["nursery"]["dq"],
+    ("dq_nursery", "dataquality", "Nursery money entries", "pct", "target", True, lambda u: u["nursery"]["dq"],
      "Share of money entries with no recording error (sale with no plants, the same value re-entered, over Rs 5,000 per plant). 100 = no errors"),
-    ("dq_plantation", "plantation", "Data quality", "pct", "target", True, lambda u: u["plantation"]["dq"],
+    ("dq_plantation", "dataquality", "Plantation counts", "pct", "target", True, lambda u: u["plantation"]["dq"],
      "Share of seasons with no recording error (more plants alive than given, beyond last season's survivors). 100 = no errors"),
     ("pwd_target", "disability", "Disability SHG target", "pct", "target", True, lambda u: u["disability"]["target_pct"],
      "Disability SHGs ÷ (active VOs ÷ 2, rounded up), capped at 100%"),
@@ -1054,7 +1059,7 @@ def run_month(ym):
 
 # parts of a unit that change between periods; everything else is stored once
 VARY = ["dak", "nursery", "plantation", "vprp", "kpi", "comp_scores", "overall_score", "overall_state_rank",
-        "overall_state_n", "overall_sort", "overall_district_rank", "overall_district_n", "active_members", "dist", "pl_season"]
+        "overall_state_n", "overall_sort", "overall_district_rank", "overall_district_n", "active_members", "dist", "pl_season", "dataquality"]
 
 def main():
     RES = {p: run_period(p) for p in PERIODS}
