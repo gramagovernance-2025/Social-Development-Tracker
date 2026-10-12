@@ -30,7 +30,7 @@ Then open http://localhost:8765/dasboard.html. Double-clicking `dasboard.html` a
 
 ## Layout
 
-Tabs: Overview, one tab per component (Gender (DAK), VRF, VPRP, Nursery, Plantation, Disability SHGs, Second Chance, Budget), then **SD Index** and **Discrepancy Report**. Budget is a placeholder with weight 0 until its district data and weight are agreed. Each component tab opens with that component's score and the score of each metric behind it, followed by the detail and a map and ranking. The SD Index tab combines the components. Click any component there to see its metrics.
+Tabs: Overview, one tab per component (Gender (DAK), VRF, VPRP, Nursery, Plantation, Disability SHGs, Second Chance, Budget), then **SD Index** and **Discrepancy Report**. Budget is a placeholder until its district data arrives. Each component tab opens with that component's score and the score of each metric behind it, followed by the detail and a map and ranking. The SD Index tab combines the components. Click any component there to see its metrics.
 
 ## Period selector
 
@@ -51,7 +51,7 @@ The **Discrepancy Report** tab lists entries that look wrong, at block and distr
 
 ## Scoring
 
-- **Default weights** (agreed Oct 2026): DAK 30, VRF 10, VPRP 20, Nursery 5, Plantation 5, Disability 10, Second Chance 20. Until Second Chance has data, its share is spread across the others in proportion to their weights. Viewers can change the weights on the page for their own session.
+- **Default weights:** equal for every component (agreed Oct 2026). Second Chance and Budget drop out until their data arrives, so each of the six components with data counts for 1/6. Viewers can change the weights on the page for their own session.
 
 - **"vs target" KPIs** score as % of target, capped at 100: nursery target, VPRP coverage, social issues filed, disability SHG target. Alternate services is scored as a percentile on the number of different services offered in the selected period.
 - **"percentile" KPIs** score as a state percentile: blocks are compared with blocks, districts with districts. Ties share the lowest rank in the tie, so hundreds of blocks with zero nursery sales don't all get a high score.

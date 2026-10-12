@@ -124,6 +124,13 @@ section{ margin-top:40px; }
 .navfield select#sel-period{ font-weight:700; color:var(--primary); border-color:var(--primary); }
 .month-panel{ background:var(--primary-soft); border:1px solid #9fd3bd; border-radius:14px; padding:18px 20px; }
 .month-panel .tile{ background:#fff; }
+/* month picker beside the tab title (DAK and Nursery) */
+.page-title.with-pick{ display:flex; justify-content:space-between; align-items:flex-end; gap:12px 20px; flex-wrap:wrap; }
+.month-pick{ display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line-strong); border-radius:12px; padding:8px 12px; }
+.month-pick label{ font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); }
+.month-pick select{ font-family:inherit; font-size:14px; font-weight:700; color:var(--primary); padding:7px 10px; border-radius:8px; border:1px solid var(--primary); background:#fff; }
+.month-pick small{ display:block; font-size:11px; color:var(--ink-soft); max-width:200px; }
+.month-on{ display:inline-block; background:var(--primary); color:#fff; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; margin-left:8px; vertical-align:3px; letter-spacing:.03em; }
 /* export menu */
 .export-wrap{ position:relative; }
 .export-menu{ position:absolute; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--line-strong); border-radius:10px; box-shadow:0 8px 24px rgba(30,35,32,.12); padding:6px; z-index:50; min-width:220px; }
@@ -364,12 +371,72 @@ function isMonth(){ return /^\d{4}-\d{2}$/.test(PERIOD); }
 function view(raw){ if(!raw) return null; const y = yearKey(); return (y==='cumulative' || !raw.periods || !raw.periods[y]) ? raw : Object.assign({}, raw, raw.periods[y]); }
 function applyPeriod(){ STATE_DATA = view(RAW_STATE); DISTRICT_DATA = view(RAW_DISTRICT); BLOCK_DATA = view(RAW_BLOCK); }
 function periodText(){
+  if(typeof activeMonth==='function' && activeMonth()) return monthName(activeMonth());
   if(PERIOD==='cumulative') return 'Cumulative';
   if(isMonth()) return monthLabel(PERIOD).replace(" '", ' 20');
   const latest = Math.max(...(META.period_keys||[]).filter(k=>k!=='cumulative').map(Number));
   return PERIOD + (Number(PERIOD)===latest ? ' (so far)' : '');
 }
 function rawUnit(){ return SCOPE==='block' ? RAW_BLOCK : SCOPE==='district' ? RAW_DISTRICT : RAW_STATE; }
+// ---- Month view (DAK and Nursery tabs only). Picking a month recalculates
+// the whole tab for that month: figures, metric scores, component score,
+// map and rankings (scored against all blocks/districts for the same month).
+let MONTH = null;
+const MONTH_TABS = ['dak','nursery'];
+const MONTH_CACHE = {};
+function activeMonth(){ return MONTH && MONTH_TABS.includes(TAB) ? MONTH : null; }
+function monthsForPeriod(){ return [...(META.months||[])].filter(m=> PERIOD==='cumulative' || m.startsWith(PERIOD)).reverse(); }
+function monthName(ym){ return monthLabel(ym).replace(" '", ' 20'); }
+async function loadMonthFiles(){
+  const need = ['data/months/state.json'];
+  if(SCOPE!=='state') need.push(`data/months/districts/${document.getElementById('sel-district').value}.json`);
+  if(SCOPE==='block') need.push(`data/months/blocks/${document.getElementById('sel-block').value}.json`);
+  for(const f of need){ if(!(f in MONTH_CACHE)) MONTH_CACHE[f] = await fetchJson(f); }
+  return need.map(f=>MONTH_CACHE[f]);
+}
+function monthMerge(u, m){
+  if(!u || !m) return u;
+  return Object.assign({}, u, {dak: m.dak, nursery: Object.assign({}, u.nursery, m.nursery),
+    kpi: Object.assign({}, u.kpi, m.kpi), comp_scores: Object.assign({}, u.comp_scores, m.comp_scores)});
+}
+function mergeRows(rows, mrows, key){
+  const by = {}; (mrows||[]).forEach(r=> by[r[key]] = r);
+  return rows.map(r=> Object.assign({}, r, by[r[key]]||{}));
+}
+function applyMonthSync(ym){
+  const s = (MONTH_CACHE['data/months/state.json']||{})[ym]; if(!s) return;
+  const md = SCOPE!=='state' ? MONTH_CACHE[`data/months/districts/${document.getElementById('sel-district').value}.json`] : null;
+  const mb = SCOPE==='block' ? MONTH_CACHE[`data/months/blocks/${document.getElementById('sel-block').value}.json`] : null;
+  STATE_DATA = monthMerge(view(RAW_STATE), s);
+  STATE_DATA.districts = mergeRows(view(RAW_STATE).districts, s.districts, 'district_geo_id');
+  STATE_DATA.dist = Object.assign({}, view(RAW_STATE).dist, s.dist);
+  if(md && md[ym]){ DISTRICT_DATA = monthMerge(view(RAW_DISTRICT), md[ym]); DISTRICT_DATA.blocks = mergeRows(view(RAW_DISTRICT).blocks, md[ym].blocks, 'block_id'); }
+  if(mb && mb[ym]) BLOCK_DATA = monthMerge(view(RAW_BLOCK), mb[ym]);
+}
+async function applyMonth(){
+  const ym = activeMonth(); if(!ym) return false;
+  const [ms, md, mb] = await loadMonthFiles();
+  const s = ms[ym]; if(!s) return false;
+  STATE_DATA = monthMerge(view(RAW_STATE), s);
+  STATE_DATA.districts = mergeRows(view(RAW_STATE).districts, s.districts, 'district_geo_id');
+  STATE_DATA.dist = Object.assign({}, view(RAW_STATE).dist, s.dist);
+  if(md && md[ym]){ DISTRICT_DATA = monthMerge(view(RAW_DISTRICT), md[ym]); DISTRICT_DATA.blocks = mergeRows(view(RAW_DISTRICT).blocks, md[ym].blocks, 'block_id'); }
+  if(mb && mb[ym]) BLOCK_DATA = monthMerge(view(RAW_BLOCK), mb[ym]);
+  return true;
+}
+function monthPickHtml(){
+  const months = monthsForPeriod();
+  if(!months.length) return '';
+  const offline = FROM_DISK;
+  return `<div class="month-pick"><label for="sel-month">Month</label>
+    <select id="sel-month"${offline?' disabled title="Month view needs the online link"':''}><option value="">All of ${esc(periodTextYear())}</option>${months.map(m=>`<option value="${m}"${m===MONTH?' selected':''}>${monthName(m)}</option>`).join('')}</select>
+    <small>${offline ? 'Month view works on the online link only' : 'updates this whole tab: figures, scores, map and ranking'}</small></div>`;
+}
+function periodTextYear(){
+  if(PERIOD==='cumulative') return 'cumulative';
+  const latest = Math.max(...(META.period_keys||[]).filter(k=>k!=='cumulative').map(Number));
+  return PERIOD + (Number(PERIOD)===latest ? ' (so far)' : '');
+}
 let SCOPE='state', TAB='overview';
 let META=null, COMPS=[], SCORED_COMPS=[], KPI_BY={}, DEFAULT_W={};
 let W=null;   // current component weights
@@ -387,12 +454,14 @@ async function init(){
 ;
   try{ const sp = localStorage.getItem('sd-period'); if(sp && [...ps.options].some(o=>o.value===sp)) PERIOD = sp; }catch(e){}
   ps.value = PERIOD;
-  ps.addEventListener('change', e=>{ PERIOD = e.target.value; try{ localStorage.setItem('sd-period', PERIOD); }catch(_){} SCORING_SUMMARY_P=null; applyPeriod(); refreshView(); });
+  ps.addEventListener('change', e=>{ PERIOD = e.target.value; if(MONTH && PERIOD!=='cumulative' && !MONTH.startsWith(PERIOD)) MONTH = null; try{ localStorage.setItem('sd-period', PERIOD); }catch(_){} SCORING_SUMMARY_P=null; applyPeriod(); refreshView(); });
   applyPeriod();
   COMPS = META.components;
   META.kpis.forEach(k=> KPI_BY[k.key]=k);
   SCORED_COMPS = COMPS.filter(c=> META.kpis.some(k=>k.component===c.key));
-  COMPS.forEach(c=>{ DEFAULT_W[c.key] = c.weight!=null ? c.weight : 1; TABS.push({key:c.key, label:c.label}); });
+  // default weights from the data, scaled so the largest sits mid-slider (sliders run 0-100)
+  const maxW = Math.max(...COMPS.map(c=> c.weight!=null ? c.weight : 1)) || 1;
+  COMPS.forEach(c=>{ DEFAULT_W[c.key] = Math.round((c.weight!=null ? c.weight : 1) / maxW * 50); TABS.push({key:c.key, label:c.label}); });
   TABS.push({key:'score', label:'SD Index'});
   TABS.push({key:'checks', label:'Discrepancy Report'});
   W = {...DEFAULT_W};
@@ -458,6 +527,21 @@ function scopeName(){ return SCOPE==='block' ? BLOCK_DATA.name+' block' : SCOPE=
 
 let AFTER = [];
 function refreshView(){
+  applyPeriod();
+  if(activeMonth()){
+    const key = activeMonth()+'|'+SCOPE+'|'+(document.getElementById('sel-district').value||'')+'|'+(document.getElementById('sel-block').value||'');
+    if(window.__monthKey !== key){
+      window.__monthKey = key;
+      document.getElementById('app').innerHTML = '<p class="disclaimer">Loading '+esc(monthName(activeMonth()))+'…</p>';
+      applyMonth().then(()=>{ window.__monthReady = key; refreshView(); })
+        .catch(err=>{ MONTH = null; window.__monthKey = null; refreshView(); });
+      return;
+    }
+    if(window.__monthReady !== key) return;
+    // month data is cached now: apply synchronously
+    const ym = activeMonth(); const files = ['data/months/state.json'];
+    applyMonthSync(ym);
+  } else { window.__monthKey = null; }
   setCrumbs();
   document.querySelectorAll('.tabbtn').forEach(b=> b.classList.toggle('active', b.dataset.tab===TAB));
   window.__lists = {};
@@ -593,7 +677,7 @@ function openWeightModal(){
     <div class="weight-modal-head"><h3 id="wm-title">Component Weights</h3><button class="weight-modal-close" id="wm-x" aria-label="Close">&times;</button></div>
     <p class="weight-modal-hint">Drag a slider to change how much each component counts toward the SD Index. Weights are relative: a component a block has no score for (no DAK, Second Chance until data arrives) drops out and the rest are rescaled.</p>
     <div id="weight-rows"></div>${SCOPE==='state'?'':'<div class="weight-result" id="weight-result"></div>'}
-    <div class="weight-modal-actions"><button class="weight-reset-btn" id="wm-reset">Reset to agreed weights</button><button class="weight-done-btn" id="wm-done">Done</button></div></div></div>`);
+    <div class="weight-modal-actions"><button class="weight-reset-btn" id="wm-reset">Reset to equal weights</button><button class="weight-done-btn" id="wm-done">Done</button></div></div></div>`);
   const close = ()=>{ document.getElementById('weight-modal-backdrop').remove(); refreshView(); };
   document.getElementById('wm-x').onclick = close; document.getElementById('wm-done').onclick = close;
   document.getElementById('weight-modal-backdrop').addEventListener('click', e=>{ if(e.target.id==='weight-modal-backdrop') close(); });
@@ -822,19 +906,19 @@ function scorecardHtml(u){
       : [[u.overall_state_rank, u.overall_state_n, 'districts']];
     standing = `<div class="standing">${st.map(([r,n,l])=>`<div><b>${r!=null?r+ord(r):'—'}</b>of ${n} ${l}</div>`).join('')}</div>`;
   }
-  h += section('Index Score', (isDefaultW() ? 'agreed weights' : 'custom weights') + (SCOPE==='state'?' &middot; state scores show the median block':''), `
+  h += section('Index Score', (isDefaultW() ? 'equal weights' : 'custom weights') + (SCOPE==='state'?' &middot; state scores show the median block':''), `
     <div class="overall-wrap"><div class="overall-big"><div class="ov" style="color:${COLORS[bucket(ov)]}">${fmtScore(ov)}</div><div class="ovl">SD Index / 100${SCOPE==='state'?' (median block)':''}</div>${standing}</div>
       <div>${compRowsExpandable(u)}</div></div>
     ${!u.dak.has_dak ? note('This block has no DAK, so Gender is left out and the other weights are rescaled.') : ''}`);
   const tot = COMPS.reduce((a,c)=>a+W[c.key],0)||1;
-  h += section('How the Index Is Built', isDefaultW() ? 'agreed weights' : 'custom weights',
+  h += section('How the Index Is Built', isDefaultW() ? 'equal weights' : 'custom weights',
     `<div class="grid2" style="align-items:center;"><div>${stack(COMPS.map(c=>({label:c.label, pct:W[c.key]/tot*100})), ['#2F9C74','#5B8DB8','#CE9C3C','#7FB8A4','#B38B59','#8E7CC3','#C9CEC9'], {height:260, legendRight:true})}</div>
      <div><p class="disclaimer" style="margin:0 0 10px;">Each component score is the average of its metric scores. Metrics with a target score as % of target; the rest score as a percentile against other blocks (or districts).</p>
      <p class="disclaimer" style="margin:0 0 10px;">For Bihar as a whole there is nothing to compare with, so target metrics use Bihar's own value and the other scores show the median block.</p>
-     <p class="disclaimer" style="margin:0 0 14px;">Second Chance has no data yet, so its share is spread across the other components in proportion to their weights.</p>
+     <p class="disclaimer" style="margin:0 0 14px;">Second Chance and Budget have no data yet, so they are left out and the other components share their weight equally.</p>
      <button class="weight-btn btn-open-weights">&#9881;&#65039; Change weights</button></div></div>`);
   if(SCOPE==='state'){
-    h += section('Top and Bottom 10 Blocks', 'by SD Index with the agreed weights &middot; click a bar to open the block',
+    h += section('Top and Bottom 10 Blocks', 'by SD Index with equal weights &middot; click a bar to open the block',
       `<div class="grid2">${card('<div id="top10"></div>','Top 10')}${card('<div id="bot10"></div>','Bottom 10')}</div>`, true);
     AFTER.push(()=>{ blockBars('top10', STATE_DATA.top_blocks); blockBars('bot10', STATE_DATA.bottom_blocks); });
   }
@@ -933,8 +1017,9 @@ function scorePanel(comp, u){
   const missing = s_==null ? note(comp==='dak' ? 'No DAK here, so this component is not scored and is left out of the SD Index.' : 'Not scored: no data for this component here.') : '';
   const side = SCOPE==='state' ? `<div style="margin-top:14px;text-align:left;">${distBar(STATE_DATA.dist['comp_'+comp])}</div>`
     : (rk?`<div class="standing"><div><b>${rk.rank}${ord(rk.rank)}</b>of ${rk.n} ${where}</div></div>`:'');
-  const hint = SCOPE==='state' ? 'target metrics use Bihar\'s own value; the rest show the median block'
-    : SCOPE==='block' ? 'each metric compared with all blocks in Bihar' : 'each metric compared with all 38 districts';
+  const am_ = activeMonth() ? ' for '+monthName(activeMonth()) : '';
+  const hint = SCOPE==='state' ? 'target metrics use Bihar\'s own value; the rest show the median block'+am_
+    : SCOPE==='block' ? 'each metric compared with all blocks in Bihar'+am_ : 'each metric compared with all 38 districts'+am_;
   return section(`${c.label} Score`, hint, `
     <div class="score-head"><div class="overall-big"><div class="ov" style="color:${s_==null?'var(--ink-soft)':COLORS[bucket(s_)]}">${fmtScore(s_)}</div><div class="ovl">${c.label} score / 100${SCOPE==='state'?' (median block)':''}</div>${side}</div>
       <div>${kpiRows(comp, u)}</div></div>${missing}
@@ -943,8 +1028,13 @@ function scorePanel(comp, u){
 function componentHtml(comp, u){
   const c = COMPS.find(x=>x.key===comp);
   const pn = ((META.period_notes||{})[yearKey()]||{})[comp] || META.periods[comp] || '';
-  let h = `<div class="page-title"><h2 class="serif">${c.label} &mdash; ${esc(scopeName())}</h2><span class="hint">${esc(periodText())} &middot; ${esc(pn)}</span></div>`;
-  if(comp==='dak' || comp==='nursery') h += monthPicker(comp);
+  const am = activeMonth();
+  const note = am ? (comp==='dak' ? `Cases registered in ${monthName(am)}; alternate services in ${monthName(am)}; scores compare the same month` : `Sales, payments and stock in ${monthName(am)}; scores compare the same month`) : pn;
+  let h = MONTH_TABS.includes(comp)
+    ? `<div class="page-title with-pick"><div><h2 class="serif">${c.label} &mdash; ${esc(scopeName())}${am?`<span class="month-on">${esc(monthName(am))}</span>`:''}</h2><span class="hint">${esc(periodText())} &middot; ${esc(note)}</span></div>${monthPickHtml()}</div>`
+    : `<div class="page-title"><h2 class="serif">${c.label} &mdash; ${esc(scopeName())}</h2><span class="hint">${esc(periodText())} &middot; ${esc(pn)}</span></div>`;
+  if(MONTH_TABS.includes(comp)) AFTER.push(()=>{ const sm = document.getElementById('sel-month'); if(sm) sm.addEventListener('change', ()=>{ MONTH = sm.value || null; refreshView(); }); });
+
   if(comp==='secondchance' || comp==='budget') return h + RENDER[comp](u) + footer();
   h += scorePanel(comp, u);
   h += RENDER[comp](u);
